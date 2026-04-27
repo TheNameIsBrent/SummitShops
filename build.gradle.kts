@@ -50,32 +50,29 @@ dependencies {
 }
 
 tasks {
-    // Ensure UTF-8 encoding and Java 21 target
     withType<JavaCompile> {
         options.encoding = "UTF-8"
         options.release.set(21)
     }
 
-    // Shadow jar — bundle HikariCP + MariaDB driver, relocate to avoid conflicts
     shadowJar {
-        archiveClassifier.set("") // output: oneblock-shops-1.0.0.jar (no "-all" suffix)
+        archiveClassifier.set("")
 
         relocate("com.zaxxer.hikari", "com.oneblock.shops.libs.hikari")
         relocate("org.mariadb.jdbc",  "com.oneblock.shops.libs.mariadb")
 
-        // Exclude signature files that cause issues when shading
         exclude("META-INF/*.SF")
         exclude("META-INF/*.DSA")
         exclude("META-INF/*.RSA")
     }
 
-    // Make the default 'build' task produce the shaded jar
     build {
         dependsOn(shadowJar)
     }
 
-    // Suppress the plain jar — we only want the shaded one
-    jar {
-        enabled = false
-    }
+    // REMOVED: jar { enabled = false }
+    // Disabling the plain jar breaks shadowJar in Shadow 8.x —
+    // it needs the plain jar's class output to assemble the fat jar.
+    // Setting archiveClassifier = "" on shadowJar already gives you
+    // the correctly named output without needing to suppress the plain jar.
 }
