@@ -1,0 +1,71 @@
+# OneBlock Advanced Chest Shops - Configuration
+
+# Storage backend: YAML or MYSQL
+storage: YAML
+
+# MySQL / MariaDB connection (only used when storage: MYSQL)
+mysql:
+  host: localhost
+  port: 3306
+  database: oneblock_shops
+  username: root
+  password: password
+  pool-size: 10
+  connection-timeout: 30000
+  idle-timeout: 600000
+  max-lifetime: 1800000
+
+# Allowed currencies. Each entry is:
+#   id: unique string identifier used in shop data
+#   provider: ECOBITS or VAULT
+#   display-name: shown in hologram/GUI
+#   ecobits-key: the NamespacedKey used by EcoBits (only for ECOBITS provider)
+currencies:
+  - id: vault_money
+    provider: VAULT
+    display-name: "&aCoins"
+
+  - id: island_crystals
+    provider: ECOBITS
+    display-name: "&bCrystals"
+    ecobits-key: "ecobits:island_crystals"
+
+  - id: prestige_tokens
+    provider: ECOBITS
+    display-name: "&dPrestige Tokens"
+    ecobits-key: "ecobits:prestige_tokens"
+
+# Default currency for new shops
+default-currency: vault_money
+
+# Hologram settings
+hologram:
+  # Y-offset above the chest block
+  y-offset: 1.5
+  # Whether holograms persist across restarts (ArmorStands save with the world)
+  persistent: true  # kept for config compatibility
+
+# Shop item settings
+shop-item:
+  material: CHEST
+  name: "&6&lShop Block"
+  lore:
+    - "&7Place this chest to create a shop"
+    - "&7Only island members can use your shop"
+
+# Messages
+messages:
+  no-permission: "&cYou do not have permission to do that."
+  not-island-member: "&cThis shop belongs to a different island."
+  shop-created: "&aShop created successfully!"
+  shop-removed: "&cShop removed."
+  buy-success: "&aYou bought &e{amount}x {item} &afor &e{price} {currency}&a."
+  sell-success: "&aYou sold &e{amount}x {item} &afor &e{price} {currency}&a."
+  not-enough-funds: "&cYou don't have enough {currency}."
+  not-enough-stock: "&cThis shop is out of stock."
+  shop-full: "&cThis shop is full and cannot accept more items."
+  inventory-full: "&cYour inventory is full."
+  shop-not-configured: "&cThis shop is not fully configured yet."
+  player-not-found: "&cPlayer not found."
+  shop-not-found: "&cShop not found."
+  reloaded: "&aOneBlockShops reloaded."

@@ -1,0 +1,28 @@
+name: OneBlockShops
+version: '${project.version}'
+main: com.oneblock.shops.OneBlockShopsPlugin
+api-version: '1.21'
+description: Island-based chest shops with multi-currency support
+authors: [ OneBlock ]
+softdepend:
+  - Vault
+depend:
+  - SuperiorSkyblock2
+  - eco
+
+commands:
+  shop:
+    description: Main shop management command
+    usage: /shop <give|edit|tp|delete|reload> [args]
+    permission: oneblockshops.admin
+
+permissions:
+  oneblockshops.admin:
+    description: Full admin access to shop management
+    default: op
+  oneblockshops.use:
+    description: Allows using shops
+    default: true
+  oneblockshops.create:
+    description: Allows creating shops (placing the shop item)
+    default: true
