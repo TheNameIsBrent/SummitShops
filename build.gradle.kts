@@ -56,11 +56,6 @@ tasks {
         options.release.set(21)
     }
 
-    // Process plugin.yml and config.yml (replaces ${version} etc.)
-    processResources {
-        from("src/main/resources")
-    }
-
     // Shadow jar — bundle HikariCP + MariaDB driver, relocate to avoid conflicts
     shadowJar {
         archiveClassifier.set("") // output: oneblock-shops-1.0.0.jar (no "-all" suffix)
