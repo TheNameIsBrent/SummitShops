@@ -58,11 +58,7 @@ tasks {
 
     // Process plugin.yml and config.yml (replaces ${version} etc.)
     processResources {
-        val props = mapOf("version" to version, "description" to description)
-        inputs.properties(props)
-        filesMatching(listOf("plugin.yml", "config.yml")) {
-            expand(props)
-        }
+        from("src/main/resources")
     }
 
     // Shadow jar — bundle HikariCP + MariaDB driver, relocate to avoid conflicts
