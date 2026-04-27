@@ -55,6 +55,10 @@ tasks {
         options.release.set(21)
     }
 
+    jar {
+        archiveClassifier.set("plain")
+    }
+
     shadowJar {
         archiveClassifier.set("")
 
@@ -69,10 +73,4 @@ tasks {
     build {
         dependsOn(shadowJar)
     }
-
-    // REMOVED: jar { enabled = false }
-    // Disabling the plain jar breaks shadowJar in Shadow 8.x —
-    // it needs the plain jar's class output to assemble the fat jar.
-    // Setting archiveClassifier = "" on shadowJar already gives you
-    // the correctly named output without needing to suppress the plain jar.
 }
