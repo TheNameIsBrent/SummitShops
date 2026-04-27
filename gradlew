@@ -22,8 +22,6 @@ cd "$SAVED" > /dev/null
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
-
 JAVA_EXE=java
 if ! command -v java > /dev/null 2>&1; then
     JAVA_HOME_CANDIDATES="${JAVA_HOME:-}"
@@ -35,8 +33,7 @@ if ! command -v java > /dev/null 2>&1; then
     done
 fi
 
-exec "$JAVA_EXE" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \
-    "-Dorg.gradle.appname=$APP_BASE_NAME" \
+exec "$JAVACMD" \
     -classpath "$CLASSPATH" \
     org.gradle.wrapper.GradleWrapperMain \
     "$@"
