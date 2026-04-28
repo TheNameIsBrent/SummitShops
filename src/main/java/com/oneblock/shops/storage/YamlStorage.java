@@ -59,8 +59,20 @@ public class YamlStorage implements StorageProvider {
                 long createdAt = s.getLong("created_at", System.currentTimeMillis());
                 double bank    = s.getDouble("bank_balance", 0.0);
 
-                shops.add(new Shop(id, ownerUUID, world, x, y, z,
-                        islandId, item, price, mode, currency, createdAt, bank));
+                Shop shop = new Shop(id, ownerUUID, world, x, y, z,
+                        islandId, item, price, mode, currency, createdAt, bank);
+
+                // Load virtual stock inventory (list of base64-encoded item slots)
+                java.util.List<String> stockList = s.getStringList("stock");
+                if (!stockList.isEmpty()) {
+                    ItemStack[] stock = new ItemStack[54];
+                    for (int i = 0; i < Math.min(stockList.size(), 54); i++) {
+                        String enc = stockList.get(i);
+                        if (enc != null && !enc.isEmpty()) stock[i] = fromBase64(enc);
+                    }
+                    shop.setStockContents(stock);
+                }
+                shops.add(shop);
 
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING,
@@ -85,6 +97,16 @@ public class YamlStorage implements StorageProvider {
         shopsConfig.set(path + ".currency",      shop.getCurrencyId());
         shopsConfig.set(path + ".created_at",    shop.getCreatedAt());
         shopsConfig.set(path + ".bank_balance",  shop.getBankBalance());
+
+        // Save virtual stock inventory as a list of base64-encoded slots
+        ItemStack[] stock = shop.getStockContents();
+        if (stock != null) {
+            java.util.List<String> stockList = new java.util.ArrayList<>();
+            for (ItemStack s : stock) {
+                stockList.add(s != null && s.getType() != org.bukkit.Material.AIR ? toBase64(s) : "");
+            }
+            shopsConfig.set(path + ".stock", stockList);
+        }
         flushToDisk();
     }
 

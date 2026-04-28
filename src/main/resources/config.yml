@@ -29,7 +29,7 @@ hologram:
 
 # Shop item settings
 shop-item:
-  material: CHEST
+  material: END_PORTAL_FRAME
   name: "&6&lShop Block"
   lore:
     - "&7Place this chest to create a shop"
@@ -43,8 +43,10 @@ messages:
   shop-removed: "&cShop removed."
   buy-success: "&aYou bought &e{amount}x {item} &afor &e{price} {currency}&a."
   sell-success: "&aYou sold &e{amount}x {item} &afor &e{price} {currency}&a."
-  not-enough-funds: "&cNot enough {currency}."
+  not-enough-money: "&cYou don't have enough money."
+  shop-no-funds: "&cThis shop is out of money and cannot pay you."
   not-enough-stock: "&cThis shop is out of stock."
+  no-items-to-sell: "&cYou don't have that item to sell."
   shop-full: "&cThis shop is full and cannot accept more items."
   inventory-full: "&cYour inventory is full."
   shop-not-configured: "&cThis shop is not fully configured yet."

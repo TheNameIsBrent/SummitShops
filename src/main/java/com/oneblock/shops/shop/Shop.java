@@ -23,6 +23,8 @@ public class Shop {
     private String currencyId;
     private final long createdAt;
     private double bankBalance;
+    /** Virtual 6-row (54-slot) stock inventory for this shop. */
+    private ItemStack[] stockContents;
 
     /** Full constructor used when loading from storage. */
     public Shop(UUID id, UUID ownerUUID, String worldName, double x, double y, double z,
@@ -41,6 +43,7 @@ public class Shop {
         this.currencyId = currencyId;
         this.createdAt = createdAt;
         this.bankBalance = bankBalance;
+        this.stockContents = new ItemStack[54];
     }
 
     /** Legacy constructor without bankBalance — defaults to 0. */
@@ -102,6 +105,9 @@ public class Shop {
     public String getCurrencyId() { return currencyId; }
     public void setCurrencyId(String currencyId) { this.currencyId = currencyId; }
     public long getCreatedAt() { return createdAt; }
+
+    public ItemStack[] getStockContents() { return stockContents; }
+    public void setStockContents(ItemStack[] contents) { this.stockContents = contents; }
 
     public double getBankBalance() { return bankBalance; }
     public void setBankBalance(double v) { this.bankBalance = Math.max(0.0, v); }

@@ -22,6 +22,12 @@ public enum TransactionResult {
     /** Buying player doesn't have enough currency. */
     INSUFFICIENT_FUNDS,
 
+    /** Shop bank has insufficient funds to pay the seller (SELL mode). */
+    SHOP_NO_FUNDS,
+
+    /** Selling player doesn't have the required item in their inventory. */
+    PLAYER_NO_STOCK,
+
     /** Selling player doesn't have space in their inventory. */
     PLAYER_INVENTORY_FULL,
 

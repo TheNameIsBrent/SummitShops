@@ -36,9 +36,8 @@ public final class ShopItemFactory {
      * Builds the shop block item from config, tagged with the PDC marker.
      */
     public static ItemStack createShopItem(Plugin plugin) {
-        String matName = plugin.getConfig().getString("shop-item.material", "CHEST");
-        Material material = Material.getMaterial(matName);
-        if (material == null) material = Material.CHEST;
+        // Always use END_PORTAL_FRAME regardless of config
+        Material material = Material.END_PORTAL_FRAME;
 
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();

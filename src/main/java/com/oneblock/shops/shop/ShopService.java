@@ -8,9 +8,8 @@ import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.economy.CurrencyRegistry;
 import com.oneblock.shops.util.ItemUtils;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.block.Block;
-import org.bukkit.block.Chest;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
@@ -44,15 +43,16 @@ public class ShopService {
      */
     public boolean isIslandMember(Player player, Shop shop) {
         if (isShopOwner(player, shop)) return true;
+        if (shop.getIslandId() == null) return true; // no island attached, allow all
         try {
+            // Look up the island the shop belongs to, then check if this player is a member.
+            Island shopIsland = SuperiorSkyblockAPI.getGrid().getIslandByUUID(shop.getIslandId());
+            if (shopIsland == null) return true; // island gone, allow access
             SuperiorPlayer sp = SuperiorSkyblockAPI.getPlayer(player);
-            Island island = sp.getIsland();
-            if (island == null) return false;
-            if (shop.getIslandId() == null) return false;
-            return shop.getIslandId().equals(island.getUniqueId());
+            return shopIsland.isMember(sp);
         } catch (Exception e) {
-            plugin.getLogger().warning("SSB2 check failed: " + e.getMessage());
-            return false;
+            plugin.getLogger().warning("SSB2 island member check failed: " + e.getMessage());
+            return true; // fail open so players aren't silently locked out
         }
     }
 
@@ -73,12 +73,11 @@ public class ShopService {
     public TransactionResult executeBuy(Player player, Shop shop) {
         if (!shop.isConfigured()) return TransactionResult.NOT_CONFIGURED;
 
-        Chest chest = getChest(shop);
-        if (chest == null) return TransactionResult.CHEST_MISSING;
-        Inventory chestInv = chest.getInventory();
+        // Use virtual stock inventory stored in the shop object
+        org.bukkit.inventory.Inventory stockInv = getStockInventory(shop);
 
         ItemStack shopItem = shop.getItem();
-        if (ItemUtils.countMatching(chestInv, shopItem) < shopItem.getAmount())
+        if (ItemUtils.countMatching(stockInv, shopItem) < shopItem.getAmount())
             return TransactionResult.OUT_OF_STOCK;
 
         if (!ItemUtils.hasSpace(player.getInventory(), shopItem))
@@ -91,7 +90,8 @@ public class ShopService {
         if (!prov.has(player, shop.getPrice())) return TransactionResult.INSUFFICIENT_FUNDS;
         if (!prov.withdraw(player, shop.getPrice())) return TransactionResult.ERROR;
 
-        ItemUtils.removeOne(chestInv, shopItem);
+        ItemUtils.removeOne(stockInv, shopItem);
+        shop.setStockContents(stockInv.getContents().clone());
         player.getInventory().addItem(shopItem.clone());
         shop.depositToBank(shop.getPrice());
         shopManager.markDirty(shop);
@@ -106,25 +106,25 @@ public class ShopService {
     public TransactionResult executeSell(Player player, Shop shop) {
         if (!shop.isConfigured()) return TransactionResult.NOT_CONFIGURED;
 
-        Chest chest = getChest(shop);
-        if (chest == null) return TransactionResult.CHEST_MISSING;
-        Inventory chestInv = chest.getInventory();
+        // Use virtual stock inventory stored in the shop object
+        org.bukkit.inventory.Inventory stockInv = getStockInventory(shop);
 
         ItemStack shopItem = shop.getItem();
-        if (!ItemUtils.hasSpace(chestInv, shopItem)) return TransactionResult.SHOP_FULL;
+        if (!ItemUtils.hasSpace(stockInv, shopItem)) return TransactionResult.SHOP_FULL;
 
         if (ItemUtils.countMatching(player.getInventory(), shopItem) < shopItem.getAmount())
-            return TransactionResult.OUT_OF_STOCK;
+            return TransactionResult.PLAYER_NO_STOCK;
 
         Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
         if (provOpt.isEmpty()) return TransactionResult.CURRENCY_UNAVAILABLE;
         CurrencyProvider prov = provOpt.get();
 
-        if (shop.getBankBalance() < shop.getPrice()) return TransactionResult.INSUFFICIENT_FUNDS;
+        if (shop.getBankBalance() < shop.getPrice()) return TransactionResult.SHOP_NO_FUNDS;
         if (!shop.withdrawFromBank(shop.getPrice())) return TransactionResult.ERROR;
 
         ItemUtils.removeOne(player.getInventory(), shopItem);
-        chestInv.addItem(shopItem.clone());
+        stockInv.addItem(shopItem.clone());
+        shop.setStockContents(stockInv.getContents().clone());
         prov.deposit(player, shop.getPrice());
         shopManager.markDirty(shop);
 
@@ -166,20 +166,24 @@ public class ShopService {
             shop.setBankBalance(0);
         }
 
-        Chest chest = getChest(shop);
-        if (chest != null) {
-            Inventory inv = chest.getInventory();
-            // Return all stocked items to the player
-            for (ItemStack stack : inv.getStorageContents()) {
+        // Return all stocked items to the player from virtual inventory
+        ItemStack[] stock = shop.getStockContents();
+        if (stock != null) {
+            for (ItemStack stack : stock) {
                 if (stack != null && stack.getType() != Material.AIR)
                     player.getInventory().addItem(stack.clone());
             }
-            inv.clear();
-            // Remove the physical chest block and give back the tagged shop item
-            chest.getBlock().setType(Material.AIR);
-            player.getInventory().addItem(
-                    com.oneblock.shops.util.ShopItemFactory.createShopItem(plugin));
         }
+        // Remove the END_PORTAL_FRAME block and give back the tagged shop item
+        Location blockLoc = shop.getBlockLocation();
+        if (blockLoc != null) {
+            Block shopBlock = blockLoc.getBlock();
+            if (shopBlock.getType() == Material.END_PORTAL_FRAME) {
+                shopBlock.setType(Material.AIR);
+            }
+        }
+        player.getInventory().addItem(
+                com.oneblock.shops.util.ShopItemFactory.createShopItem(plugin));
 
         shopManager.removeShop(shop.getId());
         return true;
@@ -201,19 +205,26 @@ public class ShopService {
     // Helpers
     // -----------------------------------------------------------------------
 
-    public Chest getChest(Shop shop) {
-        Location loc = shop.getBlockLocation();
-        if (loc == null) return null;
-        Block block = loc.getBlock();
-        if (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST) return null;
-        return (Chest) block.getState();
+    /**
+     * Returns a Bukkit Inventory backed by the shop's virtual stock array (54 slots).
+     * Changes to this inventory are NOT automatically saved — callers must call
+     * shop.setStockContents(inv.getContents()) and shopManager.markDirty(shop).
+     */
+    public org.bukkit.inventory.Inventory getStockInventory(Shop shop) {
+        org.bukkit.inventory.Inventory inv = org.bukkit.Bukkit.createInventory(null, 54);
+        ItemStack[] stock = shop.getStockContents();
+        if (stock != null && stock.length > 0) {
+            // Pad or trim to exactly 54 slots
+            ItemStack[] padded = new ItemStack[54];
+            System.arraycopy(stock, 0, padded, 0, Math.min(stock.length, 54));
+            inv.setContents(padded);
+        }
+        return inv;
     }
 
     public int getStockCount(Shop shop) {
         if (!shop.isConfigured()) return 0;
-        Chest chest = getChest(shop);
-        if (chest == null) return 0;
-        Inventory inv = chest.getInventory();
+        org.bukkit.inventory.Inventory inv = getStockInventory(shop);
         return shop.getMode() == ShopMode.BUY
                 ? ItemUtils.countMatching(inv, shop.getItem())
                 : ItemUtils.countAvailableSpace(inv, shop.getItem());

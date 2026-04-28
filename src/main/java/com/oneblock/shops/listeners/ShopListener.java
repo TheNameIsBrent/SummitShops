@@ -60,7 +60,7 @@ public class ShopListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
-        if (!isChest(block)) return;
+        if (!isShopBlock(block)) return;
         if (shopManager.getAtLocation(block.getLocation()).isEmpty()) return;
 
         event.setCancelled(true);
@@ -77,7 +77,7 @@ public class ShopListener implements Listener {
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getHand() == EquipmentSlot.OFF_HAND) return;
         Block block = event.getClickedBlock();
-        if (block == null || !isChest(block)) return;
+        if (block == null || !isShopBlock(block)) return;
 
         Optional<Shop> shopOpt = shopManager.getAtLocation(block.getLocation());
         if (shopOpt.isEmpty()) return;
@@ -140,8 +140,9 @@ public class ShopListener implements Listener {
             case NOT_CONFIGURED        -> player.sendMessage(msg("shop-not-configured"));
             case OUT_OF_STOCK          -> player.sendMessage(msg("not-enough-stock"));
             case SHOP_FULL             -> player.sendMessage(msg("shop-full"));
-            case INSUFFICIENT_FUNDS    -> player.sendMessage(msg("not-enough-funds")
-                    .replace("{currency}", shop.getCurrencyId()));
+            case INSUFFICIENT_FUNDS    -> player.sendMessage(msg("not-enough-money"));
+            case SHOP_NO_FUNDS         -> player.sendMessage(msg("shop-no-funds"));
+            case PLAYER_NO_STOCK       -> player.sendMessage(msg("no-items-to-sell"));
             case PLAYER_INVENTORY_FULL -> player.sendMessage(msg("inventory-full"));
             case CHEST_MISSING         -> player.sendMessage(color("&cShop chest is missing."));
             case CURRENCY_UNAVAILABLE  -> player.sendMessage(color("&cCurrency system unavailable."));
@@ -150,8 +151,8 @@ public class ShopListener implements Listener {
         }
     }
 
-    private boolean isChest(Block block) {
-        return block.getType() == Material.CHEST || block.getType() == Material.TRAPPED_CHEST;
+    private boolean isShopBlock(Block block) {
+        return block.getType() == Material.END_PORTAL_FRAME;
     }
 
     private boolean isShopInventory(org.bukkit.inventory.Inventory inv) {
