@@ -13,30 +13,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.logging.Level;
 
-/**
- * MariaDB/MySQL storage backend using HikariCP for connection pooling.
- *
- * <p>All blocking SQL operations run off the main thread via the async
- * scheduler or are called during plugin load/shutdown where blocking is safe.</p>
- *
- * <h3>Schema</h3>
- * <pre>{@code
- * CREATE TABLE IF NOT EXISTS shops (
- *   id         VARCHAR(36)  PRIMARY KEY,
- *   owner_uuid VARCHAR(36)  NOT NULL,
- *   world      VARCHAR(64)  NOT NULL,
- *   x          DOUBLE       NOT NULL,
- *   y          DOUBLE       NOT NULL,
- *   z          DOUBLE       NOT NULL,
- *   island_id  VARCHAR(36),
- *   item       MEDIUMTEXT,
- *   price      DOUBLE       NOT NULL DEFAULT 0,
- *   mode       VARCHAR(8)   NOT NULL DEFAULT 'BUY',
- *   currency   VARCHAR(64)  NOT NULL DEFAULT 'vault_money',
- *   created_at BIGINT       NOT NULL
- * );
- * }</pre>
- */
 public class MariaDBStorage implements StorageProvider {
 
     private final OneBlockShopsPlugin plugin;
@@ -49,7 +25,6 @@ public class MariaDBStorage implements StorageProvider {
     @Override
     public void initialize() {
         HikariConfig config = new HikariConfig();
-
         String host     = plugin.getConfig().getString("mysql.host", "localhost");
         int    port     = plugin.getConfig().getInt("mysql.port", 3306);
         String db       = plugin.getConfig().getString("mysql.database", "oneblock_shops");
@@ -65,8 +40,6 @@ public class MariaDBStorage implements StorageProvider {
         config.setIdleTimeout(plugin.getConfig().getLong("mysql.idle-timeout", 600000));
         config.setMaxLifetime(plugin.getConfig().getLong("mysql.max-lifetime", 1800000));
         config.setPoolName("OneBlockShops-Pool");
-
-        // MariaDB-specific optimisations
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
         config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
@@ -76,8 +49,7 @@ public class MariaDBStorage implements StorageProvider {
             createTable();
             plugin.getLogger().info("[Storage] Using MariaDB backend.");
         } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE,
-                    "[MariaDB] Failed to connect. Falling back gracefully.", e);
+            plugin.getLogger().log(Level.SEVERE, "[MariaDB] Failed to connect.", e);
             dataSource = null;
         }
     }
@@ -87,18 +59,19 @@ public class MariaDBStorage implements StorageProvider {
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("""
                 CREATE TABLE IF NOT EXISTS shops (
-                    id         VARCHAR(36)  NOT NULL PRIMARY KEY,
-                    owner_uuid VARCHAR(36)  NOT NULL,
-                    world      VARCHAR(64)  NOT NULL,
-                    x          DOUBLE       NOT NULL,
-                    y          DOUBLE       NOT NULL,
-                    z          DOUBLE       NOT NULL,
-                    island_id  VARCHAR(36),
-                    item       MEDIUMTEXT,
-                    price      DOUBLE       NOT NULL DEFAULT 0,
-                    mode       VARCHAR(8)   NOT NULL DEFAULT 'BUY',
-                    currency   VARCHAR(64)  NOT NULL DEFAULT 'vault_money',
-                    created_at BIGINT       NOT NULL
+                    id            VARCHAR(36)  NOT NULL PRIMARY KEY,
+                    owner_uuid    VARCHAR(36)  NOT NULL,
+                    world         VARCHAR(64)  NOT NULL,
+                    x             DOUBLE       NOT NULL,
+                    y             DOUBLE       NOT NULL,
+                    z             DOUBLE       NOT NULL,
+                    island_id     VARCHAR(36),
+                    item          MEDIUMTEXT,
+                    price         DOUBLE       NOT NULL DEFAULT 0,
+                    mode          VARCHAR(8)   NOT NULL DEFAULT 'BUY',
+                    currency      VARCHAR(64)  NOT NULL DEFAULT 'vault_money',
+                    created_at    BIGINT       NOT NULL,
+                    bank_balance  DOUBLE       NOT NULL DEFAULT 0
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """);
         }
@@ -108,11 +81,9 @@ public class MariaDBStorage implements StorageProvider {
     public List<Shop> loadAll() {
         List<Shop> shops = new ArrayList<>();
         if (dataSource == null) return shops;
-
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("SELECT * FROM shops");
              ResultSet rs = ps.executeQuery()) {
-
             while (rs.next()) {
                 try {
                     UUID id        = UUID.fromString(rs.getString("id"));
@@ -121,17 +92,16 @@ public class MariaDBStorage implements StorageProvider {
                     double x       = rs.getDouble("x");
                     double y       = rs.getDouble("y");
                     double z       = rs.getDouble("z");
-                    String islandStr = rs.getString("island_id");
-                    UUID islandId  = islandStr != null ? UUID.fromString(islandStr) : null;
-                    String itemB64 = rs.getString("item");
-                    ItemStack item = itemB64 != null ? YamlStorage.fromBase64(itemB64) : null;
+                    String iStr    = rs.getString("island_id");
+                    UUID islandId  = iStr != null ? UUID.fromString(iStr) : null;
+                    String b64     = rs.getString("item");
+                    ItemStack item = b64 != null ? YamlStorage.fromBase64(b64) : null;
                     double price   = rs.getDouble("price");
                     ShopMode mode  = ShopMode.valueOf(rs.getString("mode"));
                     String currency = rs.getString("currency");
                     long createdAt = rs.getLong("created_at");
-
-                    shops.add(new Shop(id, owner, world, x, y, z,
-                            islandId, item, price, mode, currency, createdAt));
+                    double bank    = rs.getDouble("bank_balance");
+                    shops.add(new Shop(id, owner, world, x, y, z, islandId, item, price, mode, currency, createdAt, bank));
                 } catch (Exception e) {
                     plugin.getLogger().warning("[MariaDB] Skipping corrupt row: " + e.getMessage());
                 }
@@ -147,20 +117,15 @@ public class MariaDBStorage implements StorageProvider {
         if (dataSource == null) return;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                INSERT INTO shops
-                    (id, owner_uuid, world, x, y, z, island_id, item, price, mode, currency, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO shops (id,owner_uuid,world,x,y,z,island_id,item,price,mode,currency,created_at,bank_balance)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON DUPLICATE KEY UPDATE
-                    owner_uuid=VALUES(owner_uuid),
-                    world=VALUES(world),
+                    owner_uuid=VALUES(owner_uuid), world=VALUES(world),
                     x=VALUES(x), y=VALUES(y), z=VALUES(z),
-                    island_id=VALUES(island_id),
-                    item=VALUES(item),
-                    price=VALUES(price),
-                    mode=VALUES(mode),
-                    currency=VALUES(currency)
+                    island_id=VALUES(island_id), item=VALUES(item),
+                    price=VALUES(price), mode=VALUES(mode),
+                    currency=VALUES(currency), bank_balance=VALUES(bank_balance)
              """)) {
-
             ps.setString(1, shop.getId().toString());
             ps.setString(2, shop.getOwnerUUID().toString());
             ps.setString(3, shop.getWorldName());
@@ -173,25 +138,22 @@ public class MariaDBStorage implements StorageProvider {
             ps.setString(10, shop.getMode().name());
             ps.setString(11, shop.getCurrencyId());
             ps.setLong(12, shop.getCreatedAt());
+            ps.setDouble(13, shop.getBankBalance());
             ps.executeUpdate();
-
         } catch (SQLException e) {
             plugin.getLogger().log(Level.SEVERE, "[MariaDB] save failed for " + shop.getId(), e);
         }
     }
 
     @Override
-    public void saveAll(List<Shop> shops) {
-        shops.forEach(this::save);
-    }
+    public void saveAll(List<Shop> shops) { shops.forEach(this::save); }
 
     @Override
     public void deleteAsync(UUID shopId) {
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             if (dataSource == null) return;
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement(
-                         "DELETE FROM shops WHERE id = ?")) {
+                 PreparedStatement ps = conn.prepareStatement("DELETE FROM shops WHERE id = ?")) {
                 ps.setString(1, shopId.toString());
                 ps.executeUpdate();
             } catch (SQLException e) {

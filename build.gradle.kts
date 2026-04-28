@@ -1,6 +1,6 @@
 plugins {
     java
-    id("io.github.goooler.shadow") version "8.1.8"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "com.oneblock"
