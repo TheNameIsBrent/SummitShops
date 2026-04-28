@@ -174,8 +174,8 @@ public class ShopManager {
 
     /** Canonical location key from a Shop. */
     private String locationKey(Shop shop) {
-        return shop.getWorldName() + ":" + (int) shop.getX() + ":" +
-               (int) shop.getY() + ":" + (int) shop.getZ();
+        return shop.getWorldName() + ":" + (int) Math.floor(shop.getX()) + ":" +
+               (int) Math.floor(shop.getY()) + ":" + (int) Math.floor(shop.getZ());
     }
 
     /** Canonical location key from a Bukkit Location (block coords). */

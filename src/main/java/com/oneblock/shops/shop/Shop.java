@@ -55,9 +55,9 @@ public class Shop {
         this.id = UUID.randomUUID();
         this.ownerUUID = ownerUUID;
         this.worldName = location.getWorld().getName();
-        this.x = location.getBlockX() + 0.5;
+        this.x = location.getBlockX();
         this.y = location.getBlockY();
-        this.z = location.getBlockZ() + 0.5;
+        this.z = location.getBlockZ();
         this.islandId = islandId;
         this.item = null;
         this.price = 0.0;
@@ -70,13 +70,14 @@ public class Shop {
     public Location getLocation() {
         World world = Bukkit.getWorld(worldName);
         if (world == null) return null;
-        return new Location(world, x, y, z);
+        // +0.5 centers the hologram over the block
+        return new Location(world, Math.floor(x) + 0.5, y, Math.floor(z) + 0.5);
     }
 
     public Location getBlockLocation() {
         World world = Bukkit.getWorld(worldName);
         if (world == null) return null;
-        return new Location(world, (int) x, (int) y, (int) z);
+        return new Location(world, (int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
     }
 
     public boolean isConfigured() {

@@ -175,10 +175,10 @@ public class ShopService {
                     player.getInventory().addItem(stack.clone());
             }
             inv.clear();
-            // Give the physical chest block back as an item
-            Material chestType = chest.getBlock().getType();
+            // Remove the physical chest block and give back the tagged shop item
             chest.getBlock().setType(Material.AIR);
-            player.getInventory().addItem(new ItemStack(chestType, 1));
+            player.getInventory().addItem(
+                    com.oneblock.shops.util.ShopItemFactory.createShopItem(plugin));
         }
 
         shopManager.removeShop(shop.getId());

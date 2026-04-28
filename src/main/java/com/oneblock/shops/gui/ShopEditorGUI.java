@@ -246,12 +246,38 @@ public class ShopEditorGUI implements Listener {
             Location loc = shop.getBlockLocation();
             if (loc == null) { player.sendMessage(color("&cChest location not found.")); return; }
             org.bukkit.block.Block block = loc.getBlock();
-            if (block.getType() == Material.CHEST || block.getType() == Material.TRAPPED_CHEST) {
-                org.bukkit.block.Chest chest = (org.bukkit.block.Chest) block.getState();
-                player.openInventory(chest.getInventory());
-            } else {
+            if (!(block.getType() == Material.CHEST || block.getType() == Material.TRAPPED_CHEST)) {
                 player.sendMessage(color("&cNo chest at this shop location."));
+                return;
             }
+            org.bukkit.block.Chest chest = (org.bukkit.block.Chest) block.getState();
+            // Open a virtual inventory that mirrors the chest.
+            // This bypasses SSB2's island-protection InventoryClickEvent cancellation
+            // on the physical chest block, while still letting the owner manage stock.
+            Inventory realInv  = chest.getInventory();
+            Inventory virtualInv = Bukkit.createInventory(null, realInv.getSize(), color("&8Shop Stock"));
+            virtualInv.setContents(realInv.getContents().clone());
+
+            // Listener that syncs virtual → real on close, then reopens editor
+            Listener closeSync = new Listener() {
+                @EventHandler
+                public void onClose(org.bukkit.event.inventory.InventoryCloseEvent e) {
+                    if (!e.getPlayer().getUniqueId().equals(player.getUniqueId())) return;
+                    if (e.getInventory() != virtualInv) return;
+                    HandlerList.unregisterAll(this);
+                    // Sync contents back to the real chest
+                    org.bukkit.block.Block b2 = loc.getBlock();
+                    if (b2.getType() == Material.CHEST || b2.getType() == Material.TRAPPED_CHEST) {
+                        org.bukkit.block.Chest c2 = (org.bukkit.block.Chest) b2.getState();
+                        c2.getInventory().setContents(e.getInventory().getContents().clone());
+                    }
+                    // Reopen the shop editor
+                    plugin.getServer().getScheduler().runTaskLater(plugin,
+                            () -> new ShopEditorGUI(plugin, player, shop).open(), 1L);
+                }
+            };
+            plugin.getServer().getPluginManager().registerEvents(closeSync, plugin);
+            player.openInventory(virtualInv);
         }, 1L);
     }
 

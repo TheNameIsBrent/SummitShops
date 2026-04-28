@@ -73,7 +73,7 @@ public class ShopListener implements Listener {
     //   LEFT-CLICK:  transaction for everyone
     // -----------------------------------------------------------------------
 
-    @EventHandler(priority = EventPriority.HIGH)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getHand() == EquipmentSlot.OFF_HAND) return;
         Block block = event.getClickedBlock();
