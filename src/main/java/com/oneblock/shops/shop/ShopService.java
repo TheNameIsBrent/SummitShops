@@ -25,32 +25,34 @@ public class ShopService {
     private final CurrencyRegistry currencyRegistry;
 
     public ShopService(OneBlockShopsPlugin plugin, ShopManager shopManager, CurrencyRegistry currencyRegistry) {
-        this.plugin = plugin;
-        this.shopManager = shopManager;
+        this.plugin           = plugin;
+        this.shopManager      = shopManager;
         this.currencyRegistry = currencyRegistry;
     }
 
     // -----------------------------------------------------------------------
-    // Island checks — only used for owner actions (manage, pickup)
+    // Ownership / island checks
     // -----------------------------------------------------------------------
 
     public boolean isShopOwner(Player player, Shop shop) {
         return player.getUniqueId().equals(shop.getOwnerUUID());
     }
 
+    /**
+     * Returns true if the player is the shop owner OR an island member.
+     * Falls back to owner-only if SSB2 throws.
+     */
     public boolean isIslandMember(Player player, Shop shop) {
-        // Always allow if player is the shop owner
         if (isShopOwner(player, shop)) return true;
-        if (shop.getIslandId() == null) return false;
         try {
             SuperiorPlayer sp = SuperiorSkyblockAPI.getPlayer(player);
             Island island = sp.getIsland();
             if (island == null) return false;
+            if (shop.getIslandId() == null) return false;
             return shop.getIslandId().equals(island.getUniqueId());
         } catch (Exception e) {
-            plugin.getLogger().warning("SSB2 island check failed: " + e.getMessage());
-            // If SSB2 fails, fall back to owner-only check
-            return isShopOwner(player, shop);
+            plugin.getLogger().warning("SSB2 check failed: " + e.getMessage());
+            return false;
         }
     }
 
@@ -65,7 +67,7 @@ public class ShopService {
     }
 
     // -----------------------------------------------------------------------
-    // BUY — any player pays from their own wallet, gets item from chest
+    // BUY — player pays, receives item from chest
     // -----------------------------------------------------------------------
 
     public TransactionResult executeBuy(Player player, Shop shop) {
@@ -84,19 +86,13 @@ public class ShopService {
 
         Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
         if (provOpt.isEmpty()) return TransactionResult.CURRENCY_UNAVAILABLE;
-        CurrencyProvider provider = provOpt.get();
+        CurrencyProvider prov = provOpt.get();
 
-        if (!provider.has(player, shop.getPrice()))
-            return TransactionResult.INSUFFICIENT_FUNDS;
+        if (!prov.has(player, shop.getPrice())) return TransactionResult.INSUFFICIENT_FUNDS;
+        if (!prov.withdraw(player, shop.getPrice())) return TransactionResult.ERROR;
 
-        // Withdraw from buyer
-        if (!provider.withdraw(player, shop.getPrice())) return TransactionResult.ERROR;
-
-        // Remove item from chest, give to buyer
         ItemUtils.removeOne(chestInv, shopItem);
         player.getInventory().addItem(shopItem.clone());
-
-        // Deposit into shop bank
         shop.depositToBank(shop.getPrice());
         shopManager.markDirty(shop);
 
@@ -104,7 +100,7 @@ public class ShopService {
     }
 
     // -----------------------------------------------------------------------
-    // SELL — any player gives item to chest, shop bank pays them
+    // SELL — player gives item, shop bank pays them
     // -----------------------------------------------------------------------
 
     public TransactionResult executeSell(Player player, Shop shop) {
@@ -122,70 +118,70 @@ public class ShopService {
 
         Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
         if (provOpt.isEmpty()) return TransactionResult.CURRENCY_UNAVAILABLE;
-        CurrencyProvider provider = provOpt.get();
+        CurrencyProvider prov = provOpt.get();
 
-        // Shop bank must have enough to pay the seller
-        if (shop.getBankBalance() < shop.getPrice())
-            return TransactionResult.INSUFFICIENT_FUNDS;
-
+        if (shop.getBankBalance() < shop.getPrice()) return TransactionResult.INSUFFICIENT_FUNDS;
         if (!shop.withdrawFromBank(shop.getPrice())) return TransactionResult.ERROR;
 
-        // Move item from seller to chest
         ItemUtils.removeOne(player.getInventory(), shopItem);
         chestInv.addItem(shopItem.clone());
-
-        // Pay the seller
-        provider.deposit(player, shop.getPrice());
-
+        prov.deposit(player, shop.getPrice());
         shopManager.markDirty(shop);
+
         return TransactionResult.SUCCESS;
     }
 
     // -----------------------------------------------------------------------
-    // Pickup — returns items + bank balance to owner, removes shop
+    // Deposit into shop bank
+    // -----------------------------------------------------------------------
+
+    public boolean depositToShopBank(Player player, Shop shop, double amount) {
+        if (amount <= 0) return false;
+        Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
+        if (provOpt.isEmpty()) {
+            plugin.getLogger().warning("No provider for currency: " + shop.getCurrencyId());
+            return false;
+        }
+        CurrencyProvider prov = provOpt.get();
+        double balance = prov.getBalance(player);
+        plugin.getLogger().info("Deposit attempt: player=" + player.getName()
+                + " balance=" + balance + " amount=" + amount);
+        if (!prov.has(player, amount)) return false;
+        if (!prov.withdraw(player, amount)) return false;
+        shop.depositToBank(amount);
+        shopManager.markDirty(shop);
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // Pickup
     // -----------------------------------------------------------------------
 
     public boolean pickupShop(Player player, Shop shop) {
         if (!isIslandMember(player, shop)) return false;
 
         Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
-
-        // Return bank balance to owner
         if (shop.getBankBalance() > 0 && provOpt.isPresent()) {
             provOpt.get().deposit(player, shop.getBankBalance());
             shop.setBankBalance(0);
         }
 
-        // Return chest contents to player
         Chest chest = getChest(shop);
         if (chest != null) {
             Inventory inv = chest.getInventory();
+            // Return all stocked items to the player
             for (ItemStack stack : inv.getStorageContents()) {
-                if (stack != null && stack.getType() != Material.AIR) {
+                if (stack != null && stack.getType() != Material.AIR)
                     player.getInventory().addItem(stack.clone());
-                }
             }
             inv.clear();
+            // Give the physical chest block back as an item
+            Material chestType = chest.getBlock().getType();
             chest.getBlock().setType(Material.AIR);
+            player.getInventory().addItem(new ItemStack(chestType, 1));
         }
 
-        // Remove shop and hologram
         shopManager.removeShop(shop.getId());
-        return true;
-    }
-
-    // -----------------------------------------------------------------------
-    // Deposit into shop bank — called from GUI
-    // -----------------------------------------------------------------------
-
-    public boolean depositToShopBank(Player player, Shop shop, double amount) {
-        Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
-        if (provOpt.isEmpty()) return false;
-        CurrencyProvider provider = provOpt.get();
-        if (!provider.has(player, amount)) return false;
-        provider.withdraw(player, amount);
-        shop.depositToBank(amount);
-        shopManager.markDirty(shop);
         return true;
     }
 
@@ -195,8 +191,7 @@ public class ShopService {
 
     public Shop createShop(Player player, Location loc) {
         UUID islandId = resolveIslandId(loc);
-        // islandId may be null if SSB2 fails — shop still gets created
-        String defaultCurrency = plugin.getConfig().getString("default-currency", "money");
+        String defaultCurrency = plugin.getConfig().getString("default-currency", "vault_money");
         Shop shop = new Shop(player.getUniqueId(), loc, islandId, defaultCurrency);
         shopManager.addShop(shop);
         return shop;
@@ -219,10 +214,8 @@ public class ShopService {
         Chest chest = getChest(shop);
         if (chest == null) return 0;
         Inventory inv = chest.getInventory();
-        if (shop.getMode() == ShopMode.BUY) {
-            return ItemUtils.countMatching(inv, shop.getItem());
-        } else {
-            return ItemUtils.countAvailableSpace(inv, shop.getItem());
-        }
+        return shop.getMode() == ShopMode.BUY
+                ? ItemUtils.countMatching(inv, shop.getItem())
+                : ItemUtils.countAvailableSpace(inv, shop.getItem());
     }
 }

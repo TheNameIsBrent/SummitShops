@@ -15,22 +15,12 @@ mysql:
   idle-timeout: 600000
   max-lifetime: 1800000
 
-# Currencies
-# provider: ECOBITS or VAULT
-# ecobits-key: the NamespacedKey EcoBits uses for this currency (namespace:key)
-currencies:
-  - id: money
-    provider: ECOBITS
-    display-name: "&aMoney"
-    ecobits-key: "ecobits:money"
+# Currency — uses Vault. display-name is shown in holograms and GUI.
+currency:
+  display-name: "&6Money"
 
-  - id: gems
-    provider: ECOBITS
-    display-name: "&bGems"
-    ecobits-key: "ecobits:gems"
-
-# Default currency for new shops
-default-currency: money
+# Default currency id (do not change)
+default-currency: vault_money
 
 # Hologram settings
 hologram:
@@ -53,7 +43,7 @@ messages:
   shop-removed: "&cShop removed."
   buy-success: "&aYou bought &e{amount}x {item} &afor &e{price} {currency}&a."
   sell-success: "&aYou sold &e{amount}x {item} &afor &e{price} {currency}&a."
-  not-enough-funds: "&cNot enough {currency} — shop bank is empty."
+  not-enough-funds: "&cNot enough {currency}."
   not-enough-stock: "&cThis shop is out of stock."
   shop-full: "&cThis shop is full and cannot accept more items."
   inventory-full: "&cYour inventory is full."

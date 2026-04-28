@@ -2,8 +2,6 @@ package com.oneblock.shops;
 
 import com.oneblock.shops.commands.ShopCommand;
 import com.oneblock.shops.economy.CurrencyRegistry;
-import com.oneblock.shops.economy.EcoBitsProvider;
-import com.oneblock.shops.economy.VaultProvider;
 import com.oneblock.shops.hologram.HologramService;
 import com.oneblock.shops.listeners.ChunkLoadListener;
 import com.oneblock.shops.listeners.ShopListener;
@@ -19,9 +17,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.logging.Level;
 
-/**
- * Main plugin entry point for OneBlock Advanced Chest Shops.
- */
 public class OneBlockShopsPlugin extends JavaPlugin {
 
     private static OneBlockShopsPlugin instance;
@@ -37,73 +32,53 @@ public class OneBlockShopsPlugin extends JavaPlugin {
     public void onEnable() {
         instance = this;
 
-        // Save default config files
         saveDefaultConfig();
         saveResource("shops.yml", false);
 
-        // Initialize the shop item PDC key (must be done before any shop items are checked)
         ShopItemFactory.init(this);
 
-        // Set up Vault economy (optional)
-        if (!setupVault()) {
-            getLogger().warning("Vault not found or no economy plugin registered. " +
-                    "VAULT currency provider will be unavailable.");
+        // Vault — attempt now, but also lazily on first use
+        setupVault();
+        if (vaultEconomy == null) {
+            getLogger().warning("Vault economy not found yet — will retry on first use.");
         }
 
-        // Initialize currency registry
+        // Currency registry (single Vault currency)
         currencyRegistry = new CurrencyRegistry(this);
         currencyRegistry.loadFromConfig();
 
-        // Initialize storage
+        // Storage
         String storageType = getConfig().getString("storage", "YAML").toUpperCase();
-        if ("MYSQL".equals(storageType)) {
-            storageProvider = new MariaDBStorage(this);
-        } else {
-            storageProvider = new YamlStorage(this);
-        }
+        storageProvider = "MYSQL".equals(storageType) ? new MariaDBStorage(this) : new YamlStorage(this);
         storageProvider.initialize();
 
-        // Initialize hologram service
+        // Services
         hologramService = new HologramService(this);
+        shopManager     = new ShopManager(this, storageProvider, hologramService);
+        shopService     = new ShopService(this, shopManager, currencyRegistry);
 
-        // Initialize shop manager and service
-        shopManager = new ShopManager(this, storageProvider, hologramService);
-        shopService = new ShopService(this, shopManager, currencyRegistry);
-
-        // Load all shops into memory
         shopManager.loadAll();
 
-        // Register listeners
         getServer().getPluginManager().registerEvents(
                 new ShopListener(this, shopManager, shopService, hologramService), this);
         getServer().getPluginManager().registerEvents(
                 new ChunkLoadListener(this, shopManager, hologramService), this);
 
-        // Register commands
         ShopCommand shopCommand = new ShopCommand(this, shopManager, shopService);
         getCommand("shop").setExecutor(shopCommand);
         getCommand("shop").setTabCompleter(shopCommand);
 
-        getLogger().info("OneBlockShops enabled successfully.");
+        getLogger().info("OneBlockShops enabled.");
     }
 
     @Override
     public void onDisable() {
-        if (shopManager != null) {
-            shopManager.saveAll();
-        }
-        if (storageProvider != null) {
-            storageProvider.shutdown();
-        }
-        if (hologramService != null) {
-            hologramService.shutdown();
-        }
+        if (shopManager   != null) shopManager.saveAll();
+        if (storageProvider != null) storageProvider.shutdown();
+        if (hologramService != null) hologramService.shutdown();
         getLogger().info("OneBlockShops disabled.");
     }
 
-    /**
-     * Reload the plugin: config, currencies, and shops.
-     */
     public void reload() {
         reloadConfig();
         currencyRegistry.loadFromConfig();
@@ -112,55 +87,37 @@ public class OneBlockShopsPlugin extends JavaPlugin {
     }
 
     // -----------------------------------------------------------------------
-    // Vault setup
+    // Vault — lazy so it works even if Vault loads after us
     // -----------------------------------------------------------------------
 
     private boolean setupVault() {
-        if (getServer().getPluginManager().getPlugin("Vault") == null) {
-            return false;
-        }
+        if (getServer().getPluginManager().getPlugin("Vault") == null) return false;
         RegisteredServiceProvider<Economy> rsp =
                 getServer().getServicesManager().getRegistration(Economy.class);
-        if (rsp == null) {
-            return false;
-        }
+        if (rsp == null) return false;
         vaultEconomy = rsp.getProvider();
         return true;
+    }
+
+    /** Returns the Vault economy, attempting lazy init if not yet available. */
+    public Economy getVaultEconomy() {
+        if (vaultEconomy == null) setupVault();
+        return vaultEconomy;
+    }
+
+    public boolean hasVault() {
+        if (vaultEconomy == null) setupVault();
+        return vaultEconomy != null;
     }
 
     // -----------------------------------------------------------------------
     // Accessors
     // -----------------------------------------------------------------------
 
-    public static OneBlockShopsPlugin getInstance() {
-        return instance;
-    }
-
-    public ShopManager getShopManager() {
-        return shopManager;
-    }
-
-    public ShopService getShopService() {
-        return shopService;
-    }
-
-    public HologramService getHologramService() {
-        return hologramService;
-    }
-
-    public CurrencyRegistry getCurrencyRegistry() {
-        return currencyRegistry;
-    }
-
-    public StorageProvider getStorageProvider() {
-        return storageProvider;
-    }
-
-    public Economy getVaultEconomy() {
-        return vaultEconomy;
-    }
-
-    public boolean hasVault() {
-        return vaultEconomy != null;
-    }
+    public static OneBlockShopsPlugin getInstance() { return instance; }
+    public ShopManager getShopManager()             { return shopManager; }
+    public ShopService getShopService()             { return shopService; }
+    public HologramService getHologramService()     { return hologramService; }
+    public CurrencyRegistry getCurrencyRegistry()   { return currencyRegistry; }
+    public StorageProvider getStorageProvider()     { return storageProvider; }
 }

@@ -37,7 +37,7 @@ public class ShopListener implements Listener {
     }
 
     // -----------------------------------------------------------------------
-    // Placement — placing a shop item creates a shop and opens the editor
+    // Place shop item → register shop, open editor
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -46,50 +46,45 @@ public class ShopListener implements Listener {
         if (!ShopItemFactory.isShopItem(item)) return;
 
         Player player = event.getPlayer();
-        Block block   = event.getBlockPlaced();
-
-        Shop shop = shopService.createShop(player, block.getLocation());
+        Shop shop = shopService.createShop(player, event.getBlockPlaced().getLocation());
         player.sendMessage(msg("shop-created"));
 
-        // Open editor on the next tick so the block is placed first
-        plugin.getServer().getScheduler().runTaskLater(plugin, () ->
-                new ShopEditorGUI(plugin, player, shop).open(), 1L);
+        plugin.getServer().getScheduler().runTaskLater(plugin,
+                () -> new ShopEditorGUI(plugin, player, shop).open(), 1L);
     }
 
     // -----------------------------------------------------------------------
-    // Break — prevent breaking shop chests; must use pickup button
+    // Break — block it, tell player to use pickup
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
-        if (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST) return;
-
-        Optional<Shop> shopOpt = shopManager.getAtLocation(block.getLocation());
-        if (shopOpt.isEmpty()) return;
+        if (!isChest(block)) return;
+        if (shopManager.getAtLocation(block.getLocation()).isEmpty()) return;
 
         event.setCancelled(true);
-        event.getPlayer().sendMessage(color("&cRight-click the shop to manage it, then use &4Pick Up Shop&c to remove it."));
+        event.getPlayer().sendMessage(color("&cRight-click the shop to manage it, then use &4Pick Up Shop&c."));
     }
 
     // -----------------------------------------------------------------------
-    // Interaction — right-click opens manager (owner), left-click transacts
+    // Interact
+    //   RIGHT-CLICK: owner → editor; others → transaction
+    //   LEFT-CLICK:  transaction for everyone
     // -----------------------------------------------------------------------
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGH)
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getHand() == EquipmentSlot.OFF_HAND) return;
-
         Block block = event.getClickedBlock();
-        if (block == null) return;
-        if (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST) return;
+        if (block == null || !isChest(block)) return;
 
         Optional<Shop> shopOpt = shopManager.getAtLocation(block.getLocation());
         if (shopOpt.isEmpty()) return;
 
         event.setCancelled(true);
 
-        Shop shop     = shopOpt.get();
+        Shop shop   = shopOpt.get();
         Player player = event.getPlayer();
         Action action = event.getAction();
 
@@ -99,56 +94,46 @@ public class ShopListener implements Listener {
         }
 
         if (action == Action.RIGHT_CLICK_BLOCK) {
-            // Owner/island member opens the editor
-            if (shopService.isIslandMember(player, shop)) {
+            // Owner gets the editor. Everyone else does a transaction.
+            if (shopService.isShopOwner(player, shop)) {
                 new ShopEditorGUI(plugin, player, shop).open();
             } else {
-                // Non-member right-click = attempt to buy
-                if (shop.getMode() == ShopMode.BUY) {
-                    handleResult(player, shop, shopService.executeBuy(player, shop));
-                } else {
-                    handleResult(player, shop, shopService.executeSell(player, shop));
-                }
+                doTransaction(player, shop);
             }
         } else if (action == Action.LEFT_CLICK_BLOCK) {
-            // Left-click = transaction for everyone
-            if (shop.getMode() == ShopMode.BUY) {
-                handleResult(player, shop, shopService.executeBuy(player, shop));
-            } else {
-                handleResult(player, shop, shopService.executeSell(player, shop));
-            }
+            doTransaction(player, shop);
         }
     }
 
     // -----------------------------------------------------------------------
-    // Prevent hoppers/droppers from moving items in/out of shop chests
+    // Block hoppers/droppers
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onInventoryMove(InventoryMoveItemEvent event) {
-        if (event.getSource().getLocation() != null &&
-                shopManager.isShopAt(event.getSource().getLocation())) {
-            event.setCancelled(true);
-            return;
-        }
-        if (event.getDestination().getLocation() != null &&
-                shopManager.isShopAt(event.getDestination().getLocation())) {
+        if (isShopInventory(event.getSource()) || isShopInventory(event.getDestination())) {
             event.setCancelled(true);
         }
     }
 
     // -----------------------------------------------------------------------
-    // Transaction result messages
+    // Helpers
     // -----------------------------------------------------------------------
+
+    private void doTransaction(Player player, Shop shop) {
+        TransactionResult result = shop.getMode() == ShopMode.BUY
+                ? shopService.executeBuy(player, shop)
+                : shopService.executeSell(player, shop);
+        handleResult(player, shop, result);
+    }
 
     private void handleResult(Player player, Shop shop, TransactionResult result) {
         switch (result) {
             case SUCCESS -> {
-                String template = shop.getMode() == ShopMode.BUY
-                        ? msg("buy-success") : msg("sell-success");
-                player.sendMessage(template
-                        .replace("{amount}", String.valueOf(shop.getItem().getAmount()))
-                        .replace("{item}", getItemName(shop))
+                String tpl = shop.getMode() == ShopMode.BUY ? msg("buy-success") : msg("sell-success");
+                player.sendMessage(tpl
+                        .replace("{amount}", String.valueOf(shop.getItem() != null ? shop.getItem().getAmount() : 1))
+                        .replace("{item}", itemName(shop))
                         .replace("{price}", fmt(shop.getPrice()))
                         .replace("{currency}", shop.getCurrencyId()));
             }
@@ -158,26 +143,29 @@ public class ShopListener implements Listener {
             case INSUFFICIENT_FUNDS    -> player.sendMessage(msg("not-enough-funds")
                     .replace("{currency}", shop.getCurrencyId()));
             case PLAYER_INVENTORY_FULL -> player.sendMessage(msg("inventory-full"));
-            case CHEST_MISSING         -> player.sendMessage(color("&cShop chest is missing!"));
+            case CHEST_MISSING         -> player.sendMessage(color("&cShop chest is missing."));
             case CURRENCY_UNAVAILABLE  -> player.sendMessage(color("&cCurrency system unavailable."));
             case NOT_ISLAND_MEMBER     -> player.sendMessage(msg("not-island-member"));
             case ERROR                 -> player.sendMessage(color("&cAn internal error occurred."));
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
+    private boolean isChest(Block block) {
+        return block.getType() == Material.CHEST || block.getType() == Material.TRAPPED_CHEST;
+    }
+
+    private boolean isShopInventory(org.bukkit.inventory.Inventory inv) {
+        return inv.getLocation() != null && shopManager.isShopAt(inv.getLocation());
+    }
 
     private String msg(String key) {
-        return color(plugin.getConfig().getString("messages." + key,
-                "&c[Missing message: " + key + "]"));
+        return color(plugin.getConfig().getString("messages." + key, "&c[" + key + "]"));
     }
 
     private static String color(String s) { return s.replace("&", "\u00A7"); }
 
-    private static String getItemName(Shop shop) {
-        if (shop.getItem() == null) return "Unknown";
+    private static String itemName(Shop shop) {
+        if (shop.getItem() == null) return "?";
         if (shop.getItem().hasItemMeta() && shop.getItem().getItemMeta().hasDisplayName())
             return shop.getItem().getItemMeta().getDisplayName();
         return shop.getItem().getType().name();
