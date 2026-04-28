@@ -20,16 +20,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 6-row chest GUI (54 slots) for managing a shop.
+ * 6-row chest GUI for managing a shop.
  *
- * Layout (row 6 = controls):
- *   Slot 10 — Set Item (click with item on cursor to set)
- *   Slot 13 — Set Price (chat input)
- *   Slot 16 — Toggle Mode
- *   Slot 28 — Currency selector
- *   Slot 31 — Deposit currency (chat input)
- *   Slot 34 — Bank balance display
- *   Slot 49 — Pick Up Shop
+ * Slot layout:
+ *   10 — Set shop item (click with item in hand)
+ *   13 — Set price (chat input)
+ *   16 — Toggle BUY / SELL mode
+ *   28 — Cycle currency
+ *   31 — Deposit to shop bank (chat input)
+ *   34 — Bank balance display
+ *   40 — Open chest inventory
+ *   49 — Pick up shop
  */
 public class ShopEditorGUI implements Listener {
 
@@ -39,69 +40,69 @@ public class ShopEditorGUI implements Listener {
     private static final int SLOT_CURRENCY = 28;
     private static final int SLOT_DEPOSIT  = 31;
     private static final int SLOT_BANK     = 34;
+    private static final int SLOT_CHEST    = 40;
     private static final int SLOT_PICKUP   = 49;
 
     private final OneBlockShopsPlugin plugin;
     private final Player player;
     private final Shop shop;
-    private final Inventory inv;
+    private Inventory inv;
 
-    private boolean awaitingInput = false;
+    // When true the GUI closed because we're waiting for chat — don't unregister
+    private boolean awaitingChat = false;
 
     public ShopEditorGUI(OneBlockShopsPlugin plugin, Player player, Shop shop) {
         this.plugin = plugin;
         this.player = player;
         this.shop   = shop;
-        this.inv    = Bukkit.createInventory(null, 54, colorize("&8Shop Manager"));
-        plugin.getServer().getPluginManager().registerEvents(this, plugin);
-        refresh();
     }
 
     public void open() {
+        awaitingChat = false;
+        inv = Bukkit.createInventory(null, 54, color("&8Shop Manager"));
+        refresh();
+        plugin.getServer().getPluginManager().registerEvents(this, plugin);
         player.openInventory(inv);
     }
 
-    private void close() {
-        HandlerList.unregisterAll(this);
-        plugin.getShopManager().markDirty(shop);
-    }
-
-    public void refresh() {
+    private void refresh() {
+        if (inv == null) return;
         ItemStack filler = makeItem(Material.GRAY_STAINED_GLASS_PANE, " ", null);
         for (int i = 0; i < 54; i++) inv.setItem(i, filler);
 
-        // Slot 10 — current item or set-item prompt
+        // Slot 10 — shop item
         if (shop.getItem() != null) {
             ItemStack display = shop.getItem().clone();
             ItemMeta meta = display.getItemMeta();
             List<String> lore = meta.hasLore() ? new ArrayList<>(meta.getLore()) : new ArrayList<>();
-            lore.add(colorize("&7Click with a new item to change"));
-            lore.add(colorize("&7Click empty-handed to clear"));
+            lore.add("");
+            lore.add(color("&7Hold a new item and click to change"));
+            lore.add(color("&7Click empty-handed to clear"));
             meta.setLore(lore);
             display.setItemMeta(meta);
             inv.setItem(SLOT_ITEM, display);
         } else {
             inv.setItem(SLOT_ITEM, makeItem(Material.ITEM_FRAME,
-                    colorize("&eSet Shop Item"),
-                    List.of(colorize("&7Click while holding an item"))));
+                    color("&eSet Shop Item"),
+                    List.of(color("&7Hold an item and click this slot"))));
         }
 
         // Slot 13 — price
         inv.setItem(SLOT_PRICE, makeItem(Material.GOLD_NUGGET,
-                colorize("&6Price: &f" + fmt(shop.getPrice())),
-                List.of(colorize("&7Click to change price"))));
+                color("&6Price: &f" + fmt(shop.getPrice())),
+                List.of(color("&7Click to change"))));
 
         // Slot 16 — mode
         if (shop.getMode() == ShopMode.BUY) {
             inv.setItem(SLOT_MODE, makeItem(Material.EMERALD,
-                    colorize("&aMode: BUY"),
-                    List.of(colorize("&7Customers buy items from chest"),
-                            colorize("&eClick to switch to SELL"))));
+                    color("&aMode: BUY"),
+                    List.of(color("&7Players buy items from this chest"),
+                            color("&eClick to switch to SELL"))));
         } else {
             inv.setItem(SLOT_MODE, makeItem(Material.REDSTONE,
-                    colorize("&cMode: SELL"),
-                    List.of(colorize("&7Customers sell items into chest"),
-                            colorize("&eClick to switch to BUY"))));
+                    color("&cMode: SELL"),
+                    List.of(color("&7Players sell items into this chest"),
+                            color("&eClick to switch to BUY"))));
         }
 
         // Slot 28 — currency
@@ -110,167 +111,223 @@ public class ShopEditorGUI implements Listener {
                 .map(CurrencyProvider::getDisplayName)
                 .orElse(shop.getCurrencyId());
         List<String> currLore = new ArrayList<>();
-        currLore.add(colorize("&7Click to cycle currencies:"));
         for (CurrencyProvider cp : plugin.getCurrencyRegistry().getAllProviders()) {
             boolean sel = cp.getCurrencyId().equals(shop.getCurrencyId());
-            currLore.add(colorize((sel ? "&a▶ " : "&7  ") + cp.getDisplayName()));
+            currLore.add(color((sel ? "&a▶ " : "&7  ") + cp.getDisplayName()));
         }
+        currLore.add("");
+        currLore.add(color("&eClick to cycle"));
         inv.setItem(SLOT_CURRENCY, makeItem(Material.SUNFLOWER,
-                colorize("&eCurrency: " + currDisplay), currLore));
+                color("&eCurrency: " + currDisplay), currLore));
 
-        // Slot 31 — deposit button
-        inv.setItem(SLOT_DEPOSIT, makeItem(Material.EMERALD,
-                colorize("&aDeposit Currency"),
-                List.of(colorize("&7Add funds to the shop bank"),
-                        colorize("&7Used to pay customers (SELL mode)"),
-                        colorize("&eClick to deposit"))));
+        // Slot 31 — deposit
+        inv.setItem(SLOT_DEPOSIT, makeItem(Material.EMERALD_BLOCK,
+                color("&aDeposit to Bank"),
+                List.of(color("&7Transfer your funds into the shop bank"),
+                        color("&7The bank pays customers in SELL mode"),
+                        color("&eClick to deposit"))));
 
-        // Slot 34 — bank balance display
+        // Slot 34 — bank balance (info only)
         inv.setItem(SLOT_BANK, makeItem(Material.GOLD_INGOT,
-                colorize("&6Shop Bank: &f" + fmt(shop.getBankBalance())),
-                List.of(colorize("&7Currency: " + currDisplay),
-                        colorize("&7Used to pay sellers in SELL mode"),
-                        colorize("&7Returned to you on pickup"))));
+                color("&6Bank Balance: &f" + fmt(shop.getBankBalance())),
+                List.of(color("&7Currency: " + currDisplay),
+                        color("&7Returned to you on pickup"))));
+
+        // Slot 40 — open chest inventory
+        inv.setItem(SLOT_CHEST, makeItem(Material.CHEST,
+                color("&eManage Chest Inventory"),
+                List.of(color("&7Open the chest to add/remove stock"))));
 
         // Slot 49 — pickup
         inv.setItem(SLOT_PICKUP, makeItem(Material.BARRIER,
-                colorize("&cPick Up Shop"),
-                List.of(colorize("&7Removes the shop and chest"),
-                        colorize("&7Returns all items + bank balance to you"),
-                        colorize("&4Click to confirm pickup"))));
+                color("&cPick Up Shop"),
+                List.of(color("&7Returns all items + bank balance to you"),
+                        color("&7Removes the chest and hologram"),
+                        color("&4Click to pick up"))));
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (!event.getWhoClicked().getUniqueId().equals(player.getUniqueId())) return;
-        if (!event.getInventory().equals(inv)) return;
+        if (event.getInventory() != inv) return;
 
         int slot = event.getRawSlot();
 
-        // Allow item placement only in slot 10
-        if (slot == SLOT_ITEM) {
-            event.setCancelled(true);
-            handleItemSlot(event);
-            return;
-        }
+        // Only slot 10 has special handling — everything else is cancelled
+        if (slot >= 54) return; // clicked in player inventory — allow
 
-        // Cancel all other clicks inside the GUI
-        if (slot < 54) {
-            event.setCancelled(true);
-            switch (slot) {
-                case SLOT_PRICE    -> handlePriceClick();
-                case SLOT_MODE     -> handleModeToggle();
-                case SLOT_CURRENCY -> handleCurrencyCycle();
-                case SLOT_DEPOSIT  -> handleDepositClick();
-                case SLOT_PICKUP   -> handlePickup();
-            }
+        event.setCancelled(true);
+
+        switch (slot) {
+            case SLOT_ITEM     -> handleSetItem();
+            case SLOT_PRICE    -> handleSetPrice();
+            case SLOT_MODE     -> handleToggleMode();
+            case SLOT_CURRENCY -> handleCycleCurrency();
+            case SLOT_DEPOSIT  -> handleDeposit();
+            case SLOT_CHEST    -> handleOpenChest();
+            case SLOT_PICKUP   -> handlePickup();
         }
     }
 
-    private void handleItemSlot(InventoryClickEvent event) {
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            ItemStack cursor = player.getItemOnCursor();
-            if (cursor != null && cursor.getType() != Material.AIR) {
-                // Set item from cursor
-                shop.setItem(cursor.clone());
-                player.setItemOnCursor(new ItemStack(Material.AIR));
-                player.sendMessage(colorize("&aShop item set to &f" + cursor.getType().name() + "&a."));
-            } else if (shop.getItem() != null) {
-                // Return the current item to the player
+    // -----------------------------------------------------------------------
+    // Handlers
+    // -----------------------------------------------------------------------
+
+    private void handleSetItem() {
+        // Check what the player is holding in their hand
+        ItemStack hand = player.getInventory().getItemInMainHand();
+        if (hand.getType() == Material.AIR || hand == null) {
+            // Return current item if there is one
+            if (shop.getItem() != null) {
                 player.getInventory().addItem(shop.getItem().clone());
                 shop.setItem(null);
-                player.sendMessage(colorize("&7Shop item cleared."));
+                shopDirty();
+                player.sendMessage(color("&7Shop item cleared."));
+                refresh();
             }
+        } else {
+            shop.setItem(hand.clone());
+            shopDirty();
+            player.sendMessage(color("&aShop item set to &f" + itemName(hand) + "&a."));
             refresh();
-        });
+        }
     }
 
-    private void handlePriceClick() {
-        player.closeInventory();
-        awaitingInput = true;
-        player.sendMessage(colorize("&6Enter the new price in chat:"));
-        ChatInputListener listener = new ChatInputListener(plugin, player, input -> {
+    private void handleSetPrice() {
+        closeForChat("&6Enter the new price:");
+        awaitChat(input -> {
             try {
                 double price = Double.parseDouble(input.trim());
                 if (price < 0) {
-                    player.sendMessage(colorize("&cPrice cannot be negative."));
+                    player.sendMessage(color("&cPrice must be 0 or higher."));
                 } else {
                     shop.setPrice(price);
-                    player.sendMessage(colorize("&aPrice set to &f" + fmt(price) + "&a."));
+                    shopDirty();
+                    player.sendMessage(color("&aPrice set to &f" + fmt(price) + "&a."));
                 }
             } catch (NumberFormatException e) {
-                player.sendMessage(colorize("&cInvalid number: " + input));
+                player.sendMessage(color("&cInvalid number."));
             }
-            refresh();
-            open();
+            reopenGUI();
         });
-        plugin.getServer().getPluginManager().registerEvents(listener, plugin);
     }
 
-    private void handleModeToggle() {
+    private void handleToggleMode() {
         shop.setMode(shop.getMode() == ShopMode.BUY ? ShopMode.SELL : ShopMode.BUY);
+        shopDirty();
         refresh();
     }
 
-    private void handleCurrencyCycle() {
+    private void handleCycleCurrency() {
         List<String> ids = plugin.getCurrencyRegistry().getCurrencyIds();
         if (ids.isEmpty()) return;
         int idx = ids.indexOf(shop.getCurrencyId());
         shop.setCurrencyId(ids.get((idx + 1) % ids.size()));
+        shopDirty();
         refresh();
     }
 
-    private void handleDepositClick() {
-        player.closeInventory();
-        awaitingInput = true;
-        player.sendMessage(colorize("&6Enter amount to deposit into the shop bank:"));
-        ChatInputListener listener = new ChatInputListener(plugin, player, input -> {
+    private void handleDeposit() {
+        closeForChat("&6Enter amount to deposit into the shop bank:");
+        awaitChat(input -> {
             try {
                 double amount = Double.parseDouble(input.trim());
                 if (amount <= 0) {
-                    player.sendMessage(colorize("&cAmount must be positive."));
+                    player.sendMessage(color("&cAmount must be positive."));
                 } else {
-                    var provOpt = plugin.getCurrencyRegistry().getProvider(shop.getCurrencyId());
-                    if (provOpt.isEmpty()) {
-                        player.sendMessage(colorize("&cCurrency unavailable."));
-                    } else if (!provOpt.get().has(player, amount)) {
-                        player.sendMessage(colorize("&cYou don't have enough funds."));
+                    boolean ok = plugin.getShopService().depositToShopBank(player, shop, amount);
+                    if (ok) {
+                        player.sendMessage(color("&aDeposited &f" + fmt(amount) + "&a into the shop bank."));
                     } else {
-                        provOpt.get().withdraw(player, amount);
-                        shop.depositToBank(amount);
-                        player.sendMessage(colorize("&aDeposited &f" + fmt(amount) + "&a into the shop bank."));
+                        player.sendMessage(color("&cNot enough funds to deposit that amount."));
                     }
                 }
             } catch (NumberFormatException e) {
-                player.sendMessage(colorize("&cInvalid number: " + input));
+                player.sendMessage(color("&cInvalid number."));
             }
-            refresh();
-            open();
+            reopenGUI();
+        });
+    }
+
+    private void handleOpenChest() {
+        // Close GUI and open the real chest inventory
+        HandlerList.unregisterAll(this);
+        player.closeInventory();
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            org.bukkit.block.Block block = shop.getBlockLocation() != null
+                    ? shop.getBlockLocation().getBlock() : null;
+            if (block != null && (block.getType() == Material.CHEST
+                    || block.getType() == Material.TRAPPED_CHEST)) {
+                org.bukkit.block.Chest chest = (org.bukkit.block.Chest) block.getState();
+                player.openInventory(chest.getInventory());
+            } else {
+                player.sendMessage(color("&cChest not found at shop location."));
+            }
+        }, 1L);
+    }
+
+    private void handlePickup() {
+        HandlerList.unregisterAll(this);
+        player.closeInventory();
+        boolean ok = plugin.getShopService().pickupShop(player, shop);
+        if (ok) {
+            player.sendMessage(color("&aShop picked up! Items and bank balance returned to you."));
+        } else {
+            player.sendMessage(color("&cYou don't have permission to pick up this shop."));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Chat input helpers
+    // -----------------------------------------------------------------------
+
+    private void closeForChat(String prompt) {
+        awaitingChat = true;
+        HandlerList.unregisterAll(this);
+        player.closeInventory();
+        player.sendMessage(color(prompt));
+        player.sendMessage(color("&7Type your answer in chat. Type &ccancel &7to abort."));
+    }
+
+    private void awaitChat(java.util.function.Consumer<String> callback) {
+        ChatInputListener listener = new ChatInputListener(plugin, player, input -> {
+            if (input.trim().equalsIgnoreCase("cancel")) {
+                player.sendMessage(color("&7Cancelled."));
+                reopenGUI();
+                return;
+            }
+            callback.accept(input);
         });
         plugin.getServer().getPluginManager().registerEvents(listener, plugin);
     }
 
-    private void handlePickup() {
-        player.closeInventory();
-        boolean success = plugin.getShopService().pickupShop(player, shop);
-        if (success) {
-            player.sendMessage(colorize("&aShop picked up! Items and bank balance returned to your inventory."));
-        } else {
-            player.sendMessage(colorize("&cYou don't have permission to pick up this shop."));
-        }
+    private void reopenGUI() {
+        // Small delay so inventory close/open doesn't conflict
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            new ShopEditorGUI(plugin, player, shop).open();
+        }, 2L);
     }
+
+    // -----------------------------------------------------------------------
+    // Inventory close
+    // -----------------------------------------------------------------------
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
         if (!event.getPlayer().getUniqueId().equals(player.getUniqueId())) return;
-        if (!event.getInventory().equals(inv)) return;
-        if (!awaitingInput) close();
-        awaitingInput = false;
+        if (event.getInventory() != inv) return;
+        if (!awaitingChat) {
+            HandlerList.unregisterAll(this);
+        }
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private void shopDirty() {
+        plugin.getShopManager().markDirty(shop);
+    }
 
     private static ItemStack makeItem(Material mat, String name, List<String> lore) {
         ItemStack item = new ItemStack(mat);
@@ -281,7 +338,14 @@ public class ShopEditorGUI implements Listener {
         return item;
     }
 
-    private static String colorize(String s) { return s.replace("&", "\u00A7"); }
+    private static String itemName(ItemStack item) {
+        if (item.hasItemMeta() && item.getItemMeta().hasDisplayName())
+            return item.getItemMeta().getDisplayName();
+        return item.getType().name();
+    }
+
+    private static String color(String s) { return s.replace("&", "\u00A7"); }
+
     private static String fmt(double v) {
         return v == (long) v ? String.valueOf((long) v) : String.format("%.2f", v);
     }

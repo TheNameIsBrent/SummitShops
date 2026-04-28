@@ -7,7 +7,6 @@ import com.oneblock.shops.shop.*;
 import com.oneblock.shops.util.ShopItemFactory;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
-import org.bukkit.block.Chest;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -38,7 +37,7 @@ public class ShopListener implements Listener {
     }
 
     // -----------------------------------------------------------------------
-    // Placement — shop item chest -> register shop
+    // Placement — placing a shop item creates a shop and opens the editor
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -49,26 +48,16 @@ public class ShopListener implements Listener {
         Player player = event.getPlayer();
         Block block   = event.getBlockPlaced();
 
-        // Resolve island
-        java.util.UUID islandId = shopService.resolveIslandId(block.getLocation());
-        if (islandId == null) {
-            player.sendMessage(msg("not-island-member"));
-            event.setCancelled(true);
-            return;
-        }
-
-        Shop shop = new Shop(player.getUniqueId(), block.getLocation(),
-                islandId, plugin.getConfig().getString("default-currency", "vault_money"));
-        shopManager.addShop(shop);
+        Shop shop = shopService.createShop(player, block.getLocation());
         player.sendMessage(msg("shop-created"));
 
-        // Immediately open the editor so the owner can configure it
+        // Open editor on the next tick so the block is placed first
         plugin.getServer().getScheduler().runTaskLater(plugin, () ->
                 new ShopEditorGUI(plugin, player, shop).open(), 1L);
     }
 
     // -----------------------------------------------------------------------
-    // Break — cancel; owner must use pickup button instead
+    // Break — prevent breaking shop chests; must use pickup button
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -79,13 +68,12 @@ public class ShopListener implements Listener {
         Optional<Shop> shopOpt = shopManager.getAtLocation(block.getLocation());
         if (shopOpt.isEmpty()) return;
 
-        // Always cancel breaking a shop chest — use the GUI pickup button instead
         event.setCancelled(true);
-        event.getPlayer().sendMessage(colorize("&cUse the shop manager to pick up this shop."));
+        event.getPlayer().sendMessage(color("&cRight-click the shop to manage it, then use &4Pick Up Shop&c to remove it."));
     }
 
     // -----------------------------------------------------------------------
-    // Interaction
+    // Interaction — right-click opens manager (owner), left-click transacts
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -99,37 +87,41 @@ public class ShopListener implements Listener {
         Optional<Shop> shopOpt = shopManager.getAtLocation(block.getLocation());
         if (shopOpt.isEmpty()) return;
 
-        Shop shop    = shopOpt.get();
-        Player player = event.getPlayer();
         event.setCancelled(true);
+
+        Shop shop     = shopOpt.get();
+        Player player = event.getPlayer();
+        Action action = event.getAction();
 
         if (!player.hasPermission("oneblockshops.use")) {
             player.sendMessage(msg("no-permission"));
             return;
         }
 
-        if (event.getAction() == Action.RIGHT_CLICK_BLOCK) {
-            // Owner (island member) opens the editor; others get a read-only view via transaction
+        if (action == Action.RIGHT_CLICK_BLOCK) {
+            // Owner/island member opens the editor
             if (shopService.isIslandMember(player, shop)) {
                 new ShopEditorGUI(plugin, player, shop).open();
             } else {
-                player.sendMessage(colorize("&cThis shop belongs to another island."));
+                // Non-member right-click = attempt to buy
+                if (shop.getMode() == ShopMode.BUY) {
+                    handleResult(player, shop, shopService.executeBuy(player, shop));
+                } else {
+                    handleResult(player, shop, shopService.executeSell(player, shop));
+                }
             }
-
-        } else if (event.getAction() == Action.LEFT_CLICK_BLOCK) {
-            if (!shopService.isIslandMember(player, shop)) {
-                player.sendMessage(msg("not-island-member"));
-                return;
+        } else if (action == Action.LEFT_CLICK_BLOCK) {
+            // Left-click = transaction for everyone
+            if (shop.getMode() == ShopMode.BUY) {
+                handleResult(player, shop, shopService.executeBuy(player, shop));
+            } else {
+                handleResult(player, shop, shopService.executeSell(player, shop));
             }
-            TransactionResult result = shop.getMode() == ShopMode.BUY
-                    ? shopService.executeBuy(player, shop)
-                    : shopService.executeSell(player, shop);
-            handleResult(player, shop, result);
         }
     }
 
     // -----------------------------------------------------------------------
-    // Prevent hopper/dropper interaction with shop chests
+    // Prevent hoppers/droppers from moving items in/out of shop chests
     // -----------------------------------------------------------------------
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -146,45 +138,43 @@ public class ShopListener implements Listener {
     }
 
     // -----------------------------------------------------------------------
-    // Helpers
+    // Transaction result messages
     // -----------------------------------------------------------------------
 
     private void handleResult(Player player, Shop shop, TransactionResult result) {
         switch (result) {
             case SUCCESS -> {
-                if (shop.getMode() == ShopMode.BUY) {
-                    player.sendMessage(msg("buy-success")
-                            .replace("{amount}", String.valueOf(shop.getItem().getAmount()))
-                            .replace("{item}", getItemName(shop))
-                            .replace("{price}", fmt(shop.getPrice()))
-                            .replace("{currency}", shop.getCurrencyId()));
-                } else {
-                    player.sendMessage(msg("sell-success")
-                            .replace("{amount}", String.valueOf(shop.getItem().getAmount()))
-                            .replace("{item}", getItemName(shop))
-                            .replace("{price}", fmt(shop.getPrice()))
-                            .replace("{currency}", shop.getCurrencyId()));
-                }
+                String template = shop.getMode() == ShopMode.BUY
+                        ? msg("buy-success") : msg("sell-success");
+                player.sendMessage(template
+                        .replace("{amount}", String.valueOf(shop.getItem().getAmount()))
+                        .replace("{item}", getItemName(shop))
+                        .replace("{price}", fmt(shop.getPrice()))
+                        .replace("{currency}", shop.getCurrencyId()));
             }
-            case NOT_CONFIGURED       -> player.sendMessage(msg("shop-not-configured"));
-            case NOT_ISLAND_MEMBER    -> player.sendMessage(msg("not-island-member"));
-            case OUT_OF_STOCK         -> player.sendMessage(msg("not-enough-stock"));
-            case SHOP_FULL            -> player.sendMessage(msg("shop-full"));
-            case INSUFFICIENT_FUNDS   -> player.sendMessage(msg("not-enough-funds")
+            case NOT_CONFIGURED        -> player.sendMessage(msg("shop-not-configured"));
+            case OUT_OF_STOCK          -> player.sendMessage(msg("not-enough-stock"));
+            case SHOP_FULL             -> player.sendMessage(msg("shop-full"));
+            case INSUFFICIENT_FUNDS    -> player.sendMessage(msg("not-enough-funds")
                     .replace("{currency}", shop.getCurrencyId()));
-            case PLAYER_INVENTORY_FULL-> player.sendMessage(msg("inventory-full"));
-            case CHEST_MISSING        -> player.sendMessage(colorize("&cShop chest is missing!"));
-            case CURRENCY_UNAVAILABLE -> player.sendMessage(colorize("&cCurrency system unavailable."));
-            case ERROR                -> player.sendMessage(colorize("&cAn internal error occurred."));
+            case PLAYER_INVENTORY_FULL -> player.sendMessage(msg("inventory-full"));
+            case CHEST_MISSING         -> player.sendMessage(color("&cShop chest is missing!"));
+            case CURRENCY_UNAVAILABLE  -> player.sendMessage(color("&cCurrency system unavailable."));
+            case NOT_ISLAND_MEMBER     -> player.sendMessage(msg("not-island-member"));
+            case ERROR                 -> player.sendMessage(color("&cAn internal error occurred."));
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
     private String msg(String key) {
-        return colorize(plugin.getConfig().getString("messages." + key,
+        return color(plugin.getConfig().getString("messages." + key,
                 "&c[Missing message: " + key + "]"));
     }
 
-    private static String colorize(String s) { return s.replace("&", "\u00A7"); }
+    private static String color(String s) { return s.replace("&", "\u00A7"); }
 
     private static String getItemName(Shop shop) {
         if (shop.getItem() == null) return "Unknown";
