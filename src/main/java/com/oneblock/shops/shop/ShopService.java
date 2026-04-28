@@ -95,6 +95,7 @@ public class ShopService {
         player.getInventory().addItem(shopItem.clone());
         shop.depositToBank(shop.getPrice());
         shopManager.markDirty(shop);
+        plugin.getTransactionLogger().logSuccess(player, shop, ShopMode.BUY);
 
         return TransactionResult.SUCCESS;
     }
@@ -127,6 +128,7 @@ public class ShopService {
         shop.setStockContents(stockInv.getContents().clone());
         prov.deposit(player, shop.getPrice());
         shopManager.markDirty(shop);
+        plugin.getTransactionLogger().logSuccess(player, shop, ShopMode.SELL);
 
         return TransactionResult.SUCCESS;
     }

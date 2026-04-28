@@ -94,8 +94,8 @@ public class ShopListener implements Listener {
         }
 
         if (action == Action.RIGHT_CLICK_BLOCK) {
-            // Owner gets the editor. Everyone else does a transaction.
-            if (shopService.isShopOwner(player, shop)) {
+            // Owner or island member gets the editor. Everyone else does a transaction.
+            if (shopService.isIslandMember(player, shop)) {
                 new ShopEditorGUI(plugin, player, shop).open();
             } else {
                 doTransaction(player, shop);

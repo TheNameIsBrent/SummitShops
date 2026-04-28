@@ -8,6 +8,7 @@ import com.oneblock.shops.listeners.ShopListener;
 import com.oneblock.shops.shop.ShopManager;
 import com.oneblock.shops.shop.ShopService;
 import com.oneblock.shops.storage.MariaDBStorage;
+import com.oneblock.shops.storage.TransactionLogger;
 import com.oneblock.shops.storage.StorageProvider;
 import com.oneblock.shops.storage.YamlStorage;
 import com.oneblock.shops.util.ShopItemFactory;
@@ -27,6 +28,7 @@ public class OneBlockShopsPlugin extends JavaPlugin {
     private HologramService hologramService;
     private CurrencyRegistry currencyRegistry;
     private Economy vaultEconomy;
+    private TransactionLogger transactionLogger;
 
     @Override
     public void onEnable() {
@@ -51,6 +53,9 @@ public class OneBlockShopsPlugin extends JavaPlugin {
         String storageType = getConfig().getString("storage", "YAML").toUpperCase();
         storageProvider = "MYSQL".equals(storageType) ? new MariaDBStorage(this) : new YamlStorage(this);
         storageProvider.initialize();
+
+        // Transaction logger
+        transactionLogger = new TransactionLogger(this);
 
         // Services
         hologramService = new HologramService(this);
@@ -120,4 +125,5 @@ public class OneBlockShopsPlugin extends JavaPlugin {
     public HologramService getHologramService()     { return hologramService; }
     public CurrencyRegistry getCurrencyRegistry()   { return currencyRegistry; }
     public StorageProvider getStorageProvider()     { return storageProvider; }
+    public TransactionLogger getTransactionLogger()  { return transactionLogger; }
 }

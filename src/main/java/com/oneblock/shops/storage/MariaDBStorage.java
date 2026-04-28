@@ -71,9 +71,14 @@ public class MariaDBStorage implements StorageProvider {
                     mode          VARCHAR(8)   NOT NULL DEFAULT 'BUY',
                     currency      VARCHAR(64)  NOT NULL DEFAULT 'vault_money',
                     created_at    BIGINT       NOT NULL,
-                    bank_balance  DOUBLE       NOT NULL DEFAULT 0
+                    bank_balance  DOUBLE       NOT NULL DEFAULT 0,
+                    stock         MEDIUMTEXT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """);
+            // Also create the transaction log table
+            try (Connection conn2 = dataSource.getConnection()) {
+                com.oneblock.shops.storage.TransactionLogger.createTableIfNeeded(conn2);
+            }
         }
     }
 
@@ -101,7 +106,18 @@ public class MariaDBStorage implements StorageProvider {
                     String currency = rs.getString("currency");
                     long createdAt = rs.getLong("created_at");
                     double bank    = rs.getDouble("bank_balance");
-                    shops.add(new Shop(id, owner, world, x, y, z, islandId, item, price, mode, currency, createdAt, bank));
+                    Shop shop = new Shop(id, owner, world, x, y, z, islandId, item, price, mode, currency, createdAt, bank);
+                    // Load virtual stock
+                    String stockJson = rs.getString("stock");
+                    if (stockJson != null && !stockJson.isEmpty()) {
+                        String[] parts = stockJson.split(",", -1);
+                        org.bukkit.inventory.ItemStack[] stock = new org.bukkit.inventory.ItemStack[54];
+                        for (int i = 0; i < Math.min(parts.length, 54); i++) {
+                            if (!parts[i].isEmpty()) stock[i] = YamlStorage.fromBase64(parts[i]);
+                        }
+                        shop.setStockContents(stock);
+                    }
+                    shops.add(shop);
                 } catch (Exception e) {
                     plugin.getLogger().warning("[MariaDB] Skipping corrupt row: " + e.getMessage());
                 }
@@ -117,14 +133,15 @@ public class MariaDBStorage implements StorageProvider {
         if (dataSource == null) return;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                INSERT INTO shops (id,owner_uuid,world,x,y,z,island_id,item,price,mode,currency,created_at,bank_balance)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO shops (id,owner_uuid,world,x,y,z,island_id,item,price,mode,currency,created_at,bank_balance,stock)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON DUPLICATE KEY UPDATE
                     owner_uuid=VALUES(owner_uuid), world=VALUES(world),
                     x=VALUES(x), y=VALUES(y), z=VALUES(z),
                     island_id=VALUES(island_id), item=VALUES(item),
                     price=VALUES(price), mode=VALUES(mode),
-                    currency=VALUES(currency), bank_balance=VALUES(bank_balance)
+                    currency=VALUES(currency), bank_balance=VALUES(bank_balance),
+                    stock=VALUES(stock)
              """)) {
             ps.setString(1, shop.getId().toString());
             ps.setString(2, shop.getOwnerUUID().toString());
@@ -139,6 +156,20 @@ public class MariaDBStorage implements StorageProvider {
             ps.setString(11, shop.getCurrencyId());
             ps.setLong(12, shop.getCreatedAt());
             ps.setDouble(13, shop.getBankBalance());
+            // Encode stock as comma-separated base64 slots
+            org.bukkit.inventory.ItemStack[] stock = shop.getStockContents();
+            if (stock != null) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < stock.length; i++) {
+                    if (i > 0) sb.append(",");
+                    org.bukkit.inventory.ItemStack s = stock[i];
+                    if (s != null && s.getType() != org.bukkit.Material.AIR)
+                        sb.append(YamlStorage.toBase64(s));
+                }
+                ps.setString(14, sb.toString());
+            } else {
+                ps.setString(14, null);
+            }
             ps.executeUpdate();
         } catch (SQLException e) {
             plugin.getLogger().log(Level.SEVERE, "[MariaDB] save failed for " + shop.getId(), e);
@@ -161,6 +192,9 @@ public class MariaDBStorage implements StorageProvider {
             }
         });
     }
+
+    /** Exposed for TransactionLogger to insert log rows on the same pool. */
+    public javax.sql.DataSource getDataSource() { return dataSource; }
 
     @Override
     public void shutdown() {
