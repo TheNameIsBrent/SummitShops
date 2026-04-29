@@ -36,7 +36,7 @@ import java.util.UUID;
 public class ShopCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUB_COMMANDS =
-            Arrays.asList("give", "edit", "tp", "delete", "reload", "menu");
+            Arrays.asList("give", "edit", "tp", "delete", "reload", "menu", "respawn");
 
     private final OneBlockShopsPlugin plugin;
     private final ShopManager shopManager;
@@ -64,13 +64,14 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
         }
 
         switch (args[0].toLowerCase()) {
-            case "give"   -> cmdGive(sender, args);
-            case "edit"   -> cmdEdit(sender, args);
-            case "tp"     -> cmdTp(sender, args);
-            case "delete" -> cmdDelete(sender, args);
-            case "reload" -> cmdReload(sender);
-            case "menu"   -> cmdMenu(sender);
-            default       -> sendUsage(sender);
+            case "give"    -> cmdGive(sender, args);
+            case "edit"    -> cmdEdit(sender, args);
+            case "tp"      -> cmdTp(sender, args);
+            case "delete"  -> cmdDelete(sender, args);
+            case "reload"  -> cmdReload(sender);
+            case "menu"    -> cmdMenu(sender);
+            case "respawn" -> cmdRespawn(sender);
+            default        -> sendUsage(sender);
         }
         return true;
     }
@@ -173,6 +174,16 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
         } else {
             sender.sendMessage(msg("shop-not-found"));
         }
+    }
+
+    /** /shop respawn — recreate all holograms (use after /killall) */
+    private void cmdRespawn(CommandSender sender) {
+        int count = 0;
+        for (com.oneblock.shops.shop.Shop shop : shopManager.getAllShops()) {
+            plugin.getHologramService().createOrUpdate(shop);
+            count++;
+        }
+        sender.sendMessage(colorize("&aRespawning holograms for &f" + count + "&a shops."));
     }
 
     /** /shop reload */
