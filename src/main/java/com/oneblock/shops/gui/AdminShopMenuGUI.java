@@ -137,7 +137,7 @@ public class AdminShopMenuGUI implements Listener {
             HandlerList.unregisterAll(this);
             admin.closeInventory();
             plugin.getShopManager().removeShop(shop.getId());
-            admin.sendMessage(color("&cForce-deleted shop &7[" + shop.getShortId() + "] &cowned by &f" + ownerName(shop)));
+            admin.sendMessage(pfx("&cForce-deleted shop &7[" + shop.getShortId() + "] &cowned by &f" + ownerName(shop)));
         } else if (click == ClickType.RIGHT) {
             // Open editor as admin
             HandlerList.unregisterAll(this);
@@ -148,14 +148,14 @@ public class AdminShopMenuGUI implements Listener {
             // Teleport
             org.bukkit.Location dest = shop.getBlockLocation();
             if (dest == null) {
-                admin.sendMessage(color("&cShop location unavailable."));
+                admin.sendMessage(pfx("&cShop location unavailable."));
                 return;
             }
             dest.add(0.5, 1, 0.5); // stand on top of the block
             HandlerList.unregisterAll(this);
             admin.closeInventory();
             admin.teleport(dest);
-            admin.sendMessage(color("&aTeleported to shop &7[" + shop.getShortId() + "] &aowned by &f" + ownerName(shop)));
+            admin.sendMessage(pfx("&aTeleported to shop &7[" + shop.getShortId() + "] &aowned by &f" + ownerName(shop)));
         }
     }
 
@@ -184,6 +184,12 @@ public class AdminShopMenuGUI implements Listener {
     }
 
     private static String color(String s) { return s.replace("&", "\u00A7"); }
+
+    private String prefix() {
+        return color(plugin.getConfig().getString("prefix", "&8[&6Shop&8] &r"));
+    }
+
+    private String pfx(String s) { return prefix() + color(s); }
 
     private static String fmt(double v) {
         return v == (long) v ? String.valueOf((long) v) : String.format("%.2f", v);

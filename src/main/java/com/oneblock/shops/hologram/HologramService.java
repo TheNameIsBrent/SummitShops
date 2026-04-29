@@ -169,18 +169,28 @@ public class HologramService {
                 org.bukkit.persistence.PersistentDataType.STRING,
                 shop.getId().toString());
 
-        // Spin animation — update every 4 ticks, interpolate over those same 4 ticks.
-        // The client smoothly fills the gap between server updates, eliminating jitter.
-        // 9° per update × every 4 ticks = 45°/s → one full revolution in ~8 s (classic feel).
-        final int INTERVAL = 4;        // ticks between server updates
-        final float DEG_PER_UPDATE = 9f; // degrees advanced each update
+        // Spin + bob animation.
+        // Updates every 3 ticks, client interpolates smoothly over those 3 ticks.
+        // 6° per update → ~1 full revolution per ~10 s (slow, classic feel).
+        // Bob: sinusoidal Y translation over a 4-second cycle (80 ticks).
+        final double BASE_ITEM_Y = base.getY() + plugin.getConfig().getDouble("hologram.item-y-offset", 0.8);
+        final double BOB_AMPLITUDE = 0.12; // blocks up/down
+        final int    INTERVAL      = 3;    // ticks between server updates
+        final float  DEG_PER_UPDATE = 6f;
+        final long[] tick = {0L};
         final float[] yaw = {0f};
         id.setInterpolationDelay(0);
-        id.setInterpolationDuration(INTERVAL); // client interpolates over exactly the gap
+        id.setInterpolationDuration(INTERVAL);
         int taskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             if (!id.isValid()) return;
+            tick[0]++;
             yaw[0] = (yaw[0] + DEG_PER_UPDATE) % 360f;
             float rad = (float) Math.toRadians(yaw[0]);
+            // Bob: sin wave with 80-tick period
+            double bobY = BOB_AMPLITUDE * Math.sin(2 * Math.PI * tick[0] / 80.0);
+            id.teleport(new Location(id.getWorld(), id.getLocation().getX(),
+                    BASE_ITEM_Y + bobY, id.getLocation().getZ(),
+                    id.getLocation().getYaw(), id.getLocation().getPitch()));
             id.setInterpolationDelay(0);
             id.setTransformation(new Transformation(
                     new Vector3f(0, 0, 0),

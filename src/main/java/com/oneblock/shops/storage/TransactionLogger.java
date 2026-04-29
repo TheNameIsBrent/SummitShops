@@ -120,10 +120,39 @@ public class TransactionLogger {
     }
 
     public void logPickup(Player player, Shop shop) {
+        // Build item list from stock
+        StringBuilder items = new StringBuilder();
+        org.bukkit.inventory.ItemStack[] stock = shop.getStockContents();
+        if (stock != null) {
+            java.util.Map<String, Integer> totals = new java.util.LinkedHashMap<>();
+            for (org.bukkit.inventory.ItemStack s : stock) {
+                if (s == null || s.getType() == org.bukkit.Material.AIR) continue;
+                String label = itemLabel(s);
+                totals.merge(label, s.getAmount(), Integer::sum);
+            }
+            if (totals.isEmpty()) {
+                items.append("none");
+            } else {
+                totals.forEach((label, qty) -> {
+                    if (items.length() > 0) items.append(", ");
+                    items.append(qty).append("x ").append(label);
+                });
+            }
+        } else {
+            items.append("none");
+        }
         log(shop, EventType.PICKUP,
             "BY=" + name(player) +
             " BANK_RETURNED=" + fmt(shop.getBankBalance()) +
-            " CURRENCY=" + shop.getCurrencyId());
+            " CURRENCY=" + shop.getCurrencyId() +
+            " ITEMS_RETURNED=[" + items + "]");
+    }
+
+    private static String itemLabel(org.bukkit.inventory.ItemStack item) {
+        if (item == null) return "AIR";
+        if (item.hasItemMeta() && item.getItemMeta().hasDisplayName())
+            return item.getItemMeta().getDisplayName().replaceAll("§.", "");
+        return item.getType().name();
     }
 
     // -----------------------------------------------------------------------

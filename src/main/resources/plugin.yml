@@ -15,6 +15,7 @@ commands:
     description: Main shop management command
     usage: /shop <give|edit|tp|delete|reload|menu> [args]
     permission: oneblockshops.admin
+    aliases: [playershop]
 
 permissions:
   oneblockshops.admin:

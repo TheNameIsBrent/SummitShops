@@ -6,6 +6,7 @@ import com.oneblock.shops.hologram.HologramService;
 import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.*;
 import com.oneblock.shops.util.ShopItemFactory;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
@@ -14,7 +15,11 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.world.EntitiesUnloadEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -47,7 +52,38 @@ public class ShopListener implements Listener {
         if (!ShopItemFactory.isShopItem(item)) return;
 
         Player player = event.getPlayer();
-        Shop shop = shopService.createShop(player, event.getBlockPlaced().getLocation());
+        Location loc  = event.getBlockPlaced().getLocation();
+
+        // Must be in the configured island world
+        String islandWorld = plugin.getConfig().getString("island-world", "SummitWorld");
+        if (!loc.getWorld().getName().equals(islandWorld)) {
+            event.setCancelled(true);
+            player.sendMessage(msg("wrong-world"));
+            return;
+        }
+
+        // Must be on an island the player is a member of (SSB2 island protection normally
+        // handles this, but we double-check here so the shop is never registered off-island)
+        try {
+            com.bgsoftware.superiorskyblock.api.island.Island island =
+                    com.bgsoftware.superiorskyblock.api.SuperiorSkyblockAPI.getGrid().getIslandAt(loc);
+            if (island == null) {
+                event.setCancelled(true);
+                player.sendMessage(msg("not-your-island"));
+                return;
+            }
+            com.bgsoftware.superiorskyblock.api.wrappers.SuperiorPlayer sp =
+                    com.bgsoftware.superiorskyblock.api.SuperiorSkyblockAPI.getPlayer(player);
+            if (!island.isMember(sp)) {
+                event.setCancelled(true);
+                player.sendMessage(msg("not-your-island"));
+                return;
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[ShopListener] SSB2 island check failed on place: " + e.getMessage());
+        }
+
+        Shop shop = shopService.createShop(player, loc);
         player.sendMessage(msg("shop-created"));
 
         plugin.getServer().getScheduler().runTaskLater(plugin,
@@ -63,9 +99,42 @@ public class ShopListener implements Listener {
         Block block = event.getBlock();
         if (!isShopBlock(block)) return;
         if (shopManager.getAtLocation(block.getLocation()).isEmpty()) return;
-
         event.setCancelled(true);
-        event.getPlayer().sendMessage(color("&cRight-click the shop to manage it, then use &4Pick Up Shop&c."));
+        event.getPlayer().sendMessage(msg("shop-break-hint"));
+    }
+
+    /** Prevent TNT / other block explosions from destroying shop blocks. */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockExplode(BlockExplodeEvent event) {
+        event.blockList().removeIf(b -> isShopBlock(b) && shopManager.getAtLocation(b.getLocation()).isPresent());
+    }
+
+    /** Prevent entity explosions (creepers, TNT entities, etc.) from destroying shop blocks. */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityExplode(EntityExplodeEvent event) {
+        event.blockList().removeIf(b -> isShopBlock(b) && shopManager.getAtLocation(b.getLocation()).isPresent());
+    }
+
+    /**
+     * When entities are unloaded/cleared (e.g. /kill, entity-clear plugin),
+     * re-spawn holograms for any shops in the affected chunk area.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onEntitiesUnload(EntitiesUnloadEvent event) {
+        // Check if any of the unloaded entities are our display entities (tagged with PDC)
+        org.bukkit.NamespacedKey textKey = new org.bukkit.NamespacedKey(plugin, "shop_hologram_id");
+        org.bukkit.NamespacedKey itemKey = new org.bukkit.NamespacedKey(plugin, "shop_item_display_id");
+        boolean anyShopEntity = event.getEntities().stream().anyMatch(e ->
+                (e instanceof org.bukkit.entity.TextDisplay || e instanceof org.bukkit.entity.ItemDisplay)
+                && (e.getPersistentDataContainer().has(textKey, org.bukkit.persistence.PersistentDataType.STRING)
+                 || e.getPersistentDataContainer().has(itemKey, org.bukkit.persistence.PersistentDataType.STRING)));
+        if (!anyShopEntity) return;
+        // Reschedule hologram recreation for all shops in all loaded chunks
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            for (Shop shop : shopManager.getAllShops()) {
+                hologramService.createOrUpdate(shop);
+            }
+        }, 5L);
     }
 
     // -----------------------------------------------------------------------
@@ -164,7 +233,9 @@ public class ShopListener implements Listener {
     }
 
     private String msg(String key) {
-        return color(plugin.getConfig().getString("messages." + key, "&c[" + key + "]"));
+        String prefix = plugin.getConfig().getString("prefix", "&8[&6Shop&8] &r");
+        String text   = plugin.getConfig().getString("messages." + key, "&c[" + key + "]");
+        return color(prefix + text);
     }
 
     private static String color(String s) { return s.replace("&", "\u00A7"); }

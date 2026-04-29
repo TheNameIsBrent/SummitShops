@@ -193,13 +193,13 @@ public class ShopEditorGUI implements Listener {
             // Do NOT clear the cursor — the player keeps their item.
             dirty();
             plugin.getShopManager().refreshHologram(shop);
-            player.sendMessage(color("&aShop item set to &f" + itemName(toSet) + "&a."));
+            player.sendMessage(pfx("&aShop item set to &f" + itemName(toSet) + "&a."));
         } else {
             // Empty cursor — just clear the shop's template (it was only a copy)
             if (shop.getItem() != null) {
                 shop.setItem(null);
                 dirty();
-                player.sendMessage(color("&7Shop item cleared."));
+                player.sendMessage(pfx("&7Shop item cleared."));
             }
         }
         // Refresh on next tick so inventory state is stable
@@ -210,12 +210,12 @@ public class ShopEditorGUI implements Listener {
         awaitChat("&6Enter the new price:", input -> {
             try {
                 double price = Double.parseDouble(input.trim());
-                if (price < 0) { player.sendMessage(color("&cPrice must be 0 or higher.")); return; }
+                if (price < 0) { player.sendMessage(pfx("&cPrice must be 0 or higher.")); return; }
                 shop.setPrice(price);
                 dirty();
-                player.sendMessage(color("&aPrice set to &f" + fmt(price) + "&a."));
+                player.sendMessage(pfx("&aPrice set to &f" + fmt(price) + "&a."));
             } catch (NumberFormatException e) {
-                player.sendMessage(color("&cInvalid number. Price not changed."));
+                player.sendMessage(pfx("&cInvalid number. Price not changed."));
             }
         });
     }
@@ -231,20 +231,20 @@ public class ShopEditorGUI implements Listener {
         awaitChat("&6Enter amount to deposit into the shop bank:", input -> {
             try {
                 double amount = Double.parseDouble(input.trim());
-                if (amount <= 0) { player.sendMessage(color("&cAmount must be positive.")); return; }
+                if (amount <= 0) { player.sendMessage(pfx("&cAmount must be positive.")); return; }
                 boolean ok = plugin.getShopService().depositToShopBank(player, shop, amount);
                 if (ok) {
-                    player.sendMessage(color("&aDeposited &f" + fmt(amount) + "&a into the shop bank."));
+                    player.sendMessage(pfx("&aDeposited &f" + fmt(amount) + "&a into the shop bank."));
                 } else {
                     // Show actual balance for debugging
                     Optional<CurrencyProvider> prov = plugin.getCurrencyRegistry()
                             .getProvider(shop.getCurrencyId());
                     String balStr = prov.map(p -> fmt(p.getBalance(player))).orElse("?");
-                    player.sendMessage(color("&cFailed to deposit. Your balance: &f" + balStr
+                    player.sendMessage(pfx("&cFailed to deposit. Your balance: &f" + balStr
                             + "&c, requested: &f" + fmt(amount)));
                 }
             } catch (NumberFormatException e) {
-                player.sendMessage(color("&cInvalid number."));
+                player.sendMessage(pfx("&cInvalid number."));
             }
         });
     }
@@ -253,16 +253,16 @@ public class ShopEditorGUI implements Listener {
         awaitChat("&6Enter amount to withdraw from the shop bank:", input -> {
             try {
                 double amount = Double.parseDouble(input.trim());
-                if (amount <= 0) { player.sendMessage(color("&cAmount must be positive.")); return; }
+                if (amount <= 0) { player.sendMessage(pfx("&cAmount must be positive.")); return; }
                 boolean ok = plugin.getShopService().withdrawFromShopBank(player, shop, amount);
                 if (ok) {
-                    player.sendMessage(color("&aWithdrew &f" + fmt(amount) + "&a from the shop bank."));
+                    player.sendMessage(pfx("&aWithdrew &f" + fmt(amount) + "&a from the shop bank."));
                 } else {
-                    player.sendMessage(color("&cNot enough in the shop bank. Balance: &f"
+                    player.sendMessage(pfx("&cNot enough in the shop bank. Balance: &f"
                             + fmt(shop.getBankBalance())));
                 }
             } catch (NumberFormatException e) {
-                player.sendMessage(color("&cInvalid number."));
+                player.sendMessage(pfx("&cInvalid number."));
             }
         });
     }
@@ -316,11 +316,11 @@ public class ShopEditorGUI implements Listener {
         HandlerList.unregisterAll(this);
         player.closeInventory();
         player.sendMessage(color(prompt));
-        player.sendMessage(color("&7Type in chat, or type &ccancel &7to abort."));
+        player.sendMessage(pfx("&7Type in chat, or type &ccancel &7to abort."));
 
         ChatInputListener listener = new ChatInputListener(plugin, player, input -> {
             if (input.trim().equalsIgnoreCase("cancel")) {
-                player.sendMessage(color("&7Cancelled."));
+                player.sendMessage(pfx("&7Cancelled."));
             } else {
                 callback.accept(input);
             }
@@ -401,6 +401,12 @@ public class ShopEditorGUI implements Listener {
     }
 
     private static String color(String s) { return s.replace("&", "\u00A7"); }
+
+    private String prefix() {
+        return color(plugin.getConfig().getString("prefix", "&8[&6Shop&8] &r"));
+    }
+
+    private String pfx(String s) { return prefix() + color(s); }
 
     private static String fmt(double v) {
         return v == (long) v ? String.valueOf((long) v) : String.format("%.2f", v);

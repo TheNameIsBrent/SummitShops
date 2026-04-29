@@ -22,6 +22,12 @@ currency:
 # Default currency id (do not change)
 default-currency: vault_money
 
+# Island world — shops can only be placed in this world
+island-world: SummitWorld
+
+# Message prefix — prepended to every player message
+prefix: "&8[&6Shop&8] &r"
+
 # Hologram settings
 hologram:
   # Vertical offset above the shop block where the text hologram appears
@@ -46,10 +52,12 @@ shop-item:
     - "&7Place this block to create a shop"
     - "&7Right-click to manage your shop"
 
-# Messages
+# Messages (prefix is added automatically)
 messages:
   no-permission: "&cYou do not have permission to do that."
   not-island-member: "&cThis shop belongs to a different island."
+  wrong-world: "&cShops can only be placed in the island world."
+  not-your-island: "&cYou can only place shops on your own island."
   shop-created: "&aShop created! Right-click to manage it."
   shop-removed: "&cShop removed."
   buy-success: "&aYou bought &e{amount}x {item} &afor &e{price} {currency}&a."
@@ -63,4 +71,5 @@ messages:
   shop-not-configured: "&cThis shop is not fully configured yet."
   player-not-found: "&cPlayer not found."
   shop-not-found: "&cShop not found."
+  shop-break-hint: "&cShops can only be picked up from the manager menu."
   reloaded: "&aOneBlockShops reloaded."
