@@ -169,18 +169,25 @@ public class HologramService {
                 org.bukkit.persistence.PersistentDataType.STRING,
                 shop.getId().toString());
 
-        // Start spin animation — rotate 5° per tick (one full revolution ~1.2 s)
+        // Spin animation — update every 4 ticks, interpolate over those same 4 ticks.
+        // The client smoothly fills the gap between server updates, eliminating jitter.
+        // 9° per update × every 4 ticks = 45°/s → one full revolution in ~8 s (classic feel).
+        final int INTERVAL = 4;        // ticks between server updates
+        final float DEG_PER_UPDATE = 9f; // degrees advanced each update
         final float[] yaw = {0f};
+        id.setInterpolationDelay(0);
+        id.setInterpolationDuration(INTERVAL); // client interpolates over exactly the gap
         int taskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             if (!id.isValid()) return;
-            yaw[0] = (yaw[0] + 5f) % 360f;
+            yaw[0] = (yaw[0] + DEG_PER_UPDATE) % 360f;
             float rad = (float) Math.toRadians(yaw[0]);
+            id.setInterpolationDelay(0);
             id.setTransformation(new Transformation(
                     new Vector3f(0, 0, 0),
                     new AxisAngle4f(0, 0, 1, 0),
                     new Vector3f(0.6f, 0.6f, 0.6f),
                     new AxisAngle4f(rad, 0, 1, 0)));
-        }, 1L, 1L).getTaskId();
+        }, 1L, INTERVAL).getTaskId();
         spinTasks.put(shop.getId(), taskId);
     }
 
