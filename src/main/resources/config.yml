@@ -41,7 +41,7 @@ shop-item:
   material: END_PORTAL_FRAME
   name: "&6&lShop Block"
   lore:
-    - "&7Place this chest to create a shop"
+    - "&7Place this block to create a shop"
     - "&7Right-click to manage your shop"
 
 # Messages

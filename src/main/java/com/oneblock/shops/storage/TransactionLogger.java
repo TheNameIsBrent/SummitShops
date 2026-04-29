@@ -50,7 +50,7 @@ import java.util.logging.Level;
 public class TransactionLogger {
 
     private static final DateTimeFormatter TIMESTAMP_FMT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss UTC").withZone(ZoneOffset.UTC);
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC);
 
