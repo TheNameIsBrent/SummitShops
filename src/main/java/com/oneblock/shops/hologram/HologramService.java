@@ -120,7 +120,8 @@ public class HologramService {
 
     private void spawnTextStands(Shop shop, Location base, List<String> lines) {
         World world = base.getWorld();
-        double topY = base.getY() + TEXT_Y_BASE + (lines.size() - 1) * LINE_SPACING;
+        double textYBase = plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
+        double topY = base.getY() + textYBase + (lines.size() - 1) * LINE_SPACING;
 
         for (int i = 0; i < lines.size(); i++) {
             Location loc = base.clone();
@@ -153,8 +154,9 @@ public class HologramService {
         World world = base.getWorld();
         if (world == null) return;
 
+        double itemYBase = plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
         Location loc = base.clone();
-        loc.setY(base.getY() + ITEM_Y_BASE);
+        loc.setY(base.getY() + itemYBase);
 
         ArmorStand as = (ArmorStand) world.spawnEntity(loc, EntityType.ARMOR_STAND);
         as.setVisible(false);
@@ -176,7 +178,7 @@ public class HologramService {
         // Bob + spin animation
         // Single task per shop; self-terminates if entity becomes invalid.
         // cancelAnim() is always called before this, so no stacking possible.
-        final double baseY = base.getY() + ITEM_Y_BASE;
+        final double baseY = base.getY() + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
         final long[] tick  = {0L};
 
         int taskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
