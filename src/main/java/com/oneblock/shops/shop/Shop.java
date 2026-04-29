@@ -71,6 +71,8 @@ public class Shop {
         this.currencyId = defaultCurrencyId;
         this.createdAt = Instant.now().toEpochMilli();
         this.bankBalance = 0.0;
+        this.shortId = this.id.toString().substring(0, 8).toUpperCase();
+        this.stockContents = new ItemStack[54];
     }
 
     public Location getLocation() {
