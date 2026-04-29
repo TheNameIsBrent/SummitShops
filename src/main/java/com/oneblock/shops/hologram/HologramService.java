@@ -37,8 +37,8 @@ import java.util.stream.Collectors;
  */
 public class HologramService {
 
-    private static final String PDC_KEY      = "shop_hologram_id";
-    private static final String PDC_ITEM_KEY = "shop_item_display_id";
+    public static final String PDC_KEY      = "shop_hologram_id";
+    public static final String PDC_ITEM_KEY = "shop_item_display_id";
 
     private final OneBlockShopsPlugin plugin;
     /** shopId → Bukkit task ID for the item spin animation. */
