@@ -13,7 +13,7 @@ depend:
 commands:
   shop:
     description: Main shop management command
-    usage: /shop <give|edit|tp|delete|reload> [args]
+    usage: /shop <give|edit|tp|delete|reload|menu> [args]
     permission: oneblockshops.admin
 
 permissions:

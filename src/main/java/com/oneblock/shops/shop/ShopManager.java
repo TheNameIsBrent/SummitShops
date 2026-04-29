@@ -122,6 +122,10 @@ public class ShopManager {
      * Notifies the manager that a shop's data has changed.
      * Updates hologram and saves asynchronously.
      */
+    public void refreshHologram(Shop shop) {
+        hologramService.createOrUpdate(shop);
+    }
+
     public void markDirty(Shop shop) {
         hologramService.createOrUpdate(shop);
         saveAsync(shop);

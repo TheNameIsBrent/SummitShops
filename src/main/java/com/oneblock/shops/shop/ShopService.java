@@ -95,7 +95,7 @@ public class ShopService {
         player.getInventory().addItem(shopItem.clone());
         shop.depositToBank(shop.getPrice());
         shopManager.markDirty(shop);
-        plugin.getTransactionLogger().logSuccess(player, shop, ShopMode.BUY);
+        plugin.getTransactionLogger().logBuy(player, shop);
 
         return TransactionResult.SUCCESS;
     }
@@ -128,7 +128,7 @@ public class ShopService {
         shop.setStockContents(stockInv.getContents().clone());
         prov.deposit(player, shop.getPrice());
         shopManager.markDirty(shop);
-        plugin.getTransactionLogger().logSuccess(player, shop, ShopMode.SELL);
+        plugin.getTransactionLogger().logSell(player, shop);
 
         return TransactionResult.SUCCESS;
     }
@@ -152,6 +152,7 @@ public class ShopService {
         if (!prov.withdraw(player, amount)) return false;
         shop.depositToBank(amount);
         shopManager.markDirty(shop);
+        plugin.getTransactionLogger().logBankDeposit(player, shop, amount);
         return true;
     }
 
@@ -168,12 +169,18 @@ public class ShopService {
             shop.setBankBalance(0);
         }
 
-        // Return all stocked items to the player from virtual inventory
+        // Return all stocked items to the player; drop leftovers on the ground
         ItemStack[] stock = shop.getStockContents();
+        Location dropLoc = shop.getBlockLocation() != null
+                ? shop.getBlockLocation().add(0.5, 0.5, 0.5) : player.getLocation();
         if (stock != null) {
             for (ItemStack stack : stock) {
-                if (stack != null && stack.getType() != Material.AIR)
-                    player.getInventory().addItem(stack.clone());
+                if (stack == null || stack.getType() == Material.AIR) continue;
+                java.util.Map<Integer, ItemStack> leftovers =
+                        player.getInventory().addItem(stack.clone());
+                for (ItemStack leftover : leftovers.values()) {
+                    dropLoc.getWorld().dropItemNaturally(dropLoc, leftover);
+                }
             }
         }
         // Remove the END_PORTAL_FRAME block and give back the tagged shop item
@@ -184,9 +191,13 @@ public class ShopService {
                 shopBlock.setType(Material.AIR);
             }
         }
-        player.getInventory().addItem(
-                com.oneblock.shops.util.ShopItemFactory.createShopItem(plugin));
+        ItemStack shopBlockItem = com.oneblock.shops.util.ShopItemFactory.createShopItem(plugin);
+        java.util.Map<Integer, ItemStack> leftoverShop = player.getInventory().addItem(shopBlockItem);
+        for (ItemStack lo : leftoverShop.values()) {
+            dropLoc.getWorld().dropItemNaturally(dropLoc, lo);
+        }
 
+        plugin.getTransactionLogger().logPickup(player, shop);
         shopManager.removeShop(shop.getId());
         return true;
     }
@@ -197,10 +208,42 @@ public class ShopService {
 
     public Shop createShop(Player player, Location loc) {
         UUID islandId = resolveIslandId(loc);
+        // Owner is tied to the island owner, not the placing player,
+        // so that /shop tp <islandOwner> always works regardless of who placed it.
+        UUID ownerUUID = resolveIslandOwner(islandId, player.getUniqueId());
         String defaultCurrency = plugin.getConfig().getString("default-currency", "vault_money");
-        Shop shop = new Shop(player.getUniqueId(), loc, islandId, defaultCurrency);
+        Shop shop = new Shop(ownerUUID, loc, islandId, defaultCurrency);
         shopManager.addShop(shop);
+        plugin.getTransactionLogger().logPlace(player, shop);
         return shop;
+    }
+
+    /** Returns the island owner's UUID, or fallback if unavailable. */
+    private UUID resolveIslandOwner(UUID islandId, UUID fallback) {
+        if (islandId == null) return fallback;
+        try {
+            Island island = SuperiorSkyblockAPI.getGrid().getIslandByUUID(islandId);
+            if (island == null) return fallback;
+            return island.getOwner().getUniqueId();
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Withdraw from shop bank (owner)
+    // -----------------------------------------------------------------------
+
+    public boolean withdrawFromShopBank(Player player, Shop shop, double amount) {
+        if (amount <= 0) return false;
+        if (shop.getBankBalance() < amount) return false;
+        Optional<CurrencyProvider> provOpt = currencyRegistry.getProvider(shop.getCurrencyId());
+        if (provOpt.isEmpty()) return false;
+        shop.withdrawFromBank(amount);
+        provOpt.get().deposit(player, amount);
+        shopManager.markDirty(shop);
+        plugin.getTransactionLogger().logBankWithdraw(player, shop, amount);
+        return true;
     }
 
     // -----------------------------------------------------------------------

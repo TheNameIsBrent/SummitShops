@@ -3,6 +3,7 @@ package com.oneblock.shops.listeners;
 import com.oneblock.shops.OneBlockShopsPlugin;
 import com.oneblock.shops.gui.ShopEditorGUI;
 import com.oneblock.shops.hologram.HologramService;
+import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.*;
 import com.oneblock.shops.util.ShopItemFactory;
 import org.bukkit.Material;
@@ -93,15 +94,14 @@ public class ShopListener implements Listener {
             return;
         }
 
-        if (action == Action.RIGHT_CLICK_BLOCK) {
-            // Owner or island member gets the editor. Everyone else does a transaction.
+        if (action == Action.RIGHT_CLICK_BLOCK || action == Action.LEFT_CLICK_BLOCK) {
             if (shopService.isIslandMember(player, shop)) {
+                // Island members (owner + co-members) always open the editor
                 new ShopEditorGUI(plugin, player, shop).open();
             } else {
+                // Everyone else transacts
                 doTransaction(player, shop);
             }
-        } else if (action == Action.LEFT_CLICK_BLOCK) {
-            doTransaction(player, shop);
         }
     }
 
@@ -131,11 +131,15 @@ public class ShopListener implements Listener {
         switch (result) {
             case SUCCESS -> {
                 String tpl = shop.getMode() == ShopMode.BUY ? msg("buy-success") : msg("sell-success");
+                String currDisplay = plugin.getCurrencyRegistry()
+                        .getProvider(shop.getCurrencyId())
+                        .map(p -> color(p.getDisplayName()))
+                        .orElse(shop.getCurrencyId());
                 player.sendMessage(tpl
                         .replace("{amount}", String.valueOf(shop.getItem() != null ? shop.getItem().getAmount() : 1))
                         .replace("{item}", itemName(shop))
                         .replace("{price}", fmt(shop.getPrice()))
-                        .replace("{currency}", shop.getCurrencyId()));
+                        .replace("{currency}", currDisplay));
             }
             case NOT_CONFIGURED        -> player.sendMessage(msg("shop-not-configured"));
             case OUT_OF_STOCK          -> player.sendMessage(msg("not-enough-stock"));

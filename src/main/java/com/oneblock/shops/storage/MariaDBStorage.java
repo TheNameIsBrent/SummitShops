@@ -24,6 +24,17 @@ public class MariaDBStorage implements StorageProvider {
 
     @Override
     public void initialize() {
+        // Download and load the MariaDB JDBC driver if not already present
+        DriverDownloader downloader = new DriverDownloader(
+                plugin.getLogger(), plugin.getDataFolder());
+        if (!downloader.ensureDriver()) {
+            plugin.getLogger().severe(
+                "[MariaDB] Cannot initialize — JDBC driver unavailable. " +
+                "Check logs for download errors.");
+            dataSource = null;
+            return;
+        }
+
         HikariConfig config = new HikariConfig();
         String host     = plugin.getConfig().getString("mysql.host", "localhost");
         int    port     = plugin.getConfig().getInt("mysql.port", 3306);
@@ -33,6 +44,7 @@ public class MariaDBStorage implements StorageProvider {
 
         config.setJdbcUrl("jdbc:mariadb://" + host + ":" + port + "/" + db +
                 "?useSSL=false&autoReconnect=true&characterEncoding=utf8");
+        config.setDriverClassName("org.mariadb.jdbc.Driver");
         config.setUsername(user);
         config.setPassword(password);
         config.setMaximumPoolSize(plugin.getConfig().getInt("mysql.pool-size", 10));

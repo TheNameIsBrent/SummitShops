@@ -1,6 +1,7 @@
 package com.oneblock.shops.commands;
 
 import com.oneblock.shops.OneBlockShopsPlugin;
+import com.oneblock.shops.gui.AdminShopMenuGUI;
 import com.oneblock.shops.gui.ShopEditorGUI;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopManager;
@@ -35,7 +36,7 @@ import java.util.UUID;
 public class ShopCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUB_COMMANDS =
-            Arrays.asList("give", "edit", "tp", "delete", "reload");
+            Arrays.asList("give", "edit", "tp", "delete", "reload", "menu");
 
     private final OneBlockShopsPlugin plugin;
     private final ShopManager shopManager;
@@ -68,6 +69,7 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
             case "tp"     -> cmdTp(sender, args);
             case "delete" -> cmdDelete(sender, args);
             case "reload" -> cmdReload(sender);
+            case "menu"   -> cmdMenu(sender);
             default       -> sendUsage(sender);
         }
         return true;
@@ -110,7 +112,7 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
         new ShopListGUI(plugin, admin, shops).open();
     }
 
-    /** /shop tp <player> */
+    /** /shop tp <player> — open the admin browser filtered to that player's shops */
     private void cmdTp(CommandSender sender, String[] args) {
         if (!(sender instanceof Player admin)) {
             sender.sendMessage(colorize("&cOnly players can use this command."));
@@ -118,25 +120,39 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length < 2) { sender.sendMessage(colorize("&cUsage: /shop tp <player>")); return; }
 
-        Player target = plugin.getServer().getPlayer(args[1]);
+        // Try online first, fall back to offline lookup by name
+        org.bukkit.OfflinePlayer target = plugin.getServer().getPlayer(args[1]);
+        if (target == null) {
+            for (org.bukkit.OfflinePlayer op : plugin.getServer().getOfflinePlayers()) {
+                if (args[1].equalsIgnoreCase(op.getName())) { target = op; break; }
+            }
+        }
         if (target == null) { sender.sendMessage(msg("player-not-found")); return; }
 
         List<Shop> shops = shopManager.getShopsByOwner(target.getUniqueId());
         if (shops.isEmpty()) {
-            sender.sendMessage(colorize("&c" + target.getName() + " has no shops."));
+            sender.sendMessage(colorize("&c" + args[1] + " has no shops."));
             return;
         }
 
-        // Teleport to first valid shop
-        for (Shop shop : shops) {
-            if (shop.getLocation() != null) {
-                admin.teleport(shop.getLocation().add(0, 1, 0));
-                sender.sendMessage(colorize("&aTeleported to &f" + target.getName() +
-                        "&a's shop at &f" + formatLoc(shop) + "&a."));
-                return;
+        if (shops.size() == 1) {
+            // Only one shop — teleport directly
+            Shop shop = shops.get(0);
+            org.bukkit.Location dest = shop.getBlockLocation();
+            if (dest != null) {
+                dest.add(0.5, 1, 0.5);
+                admin.teleport(dest);
+                sender.sendMessage(colorize("&aTeleported to &f" + args[1] +
+                        "&a's shop [&7" + shop.getShortId() + "&a] at &f" + formatLoc(shop)));
+            } else {
+                sender.sendMessage(colorize("&cShop location unavailable."));
             }
+        } else {
+            // Multiple shops — open the admin browser so they can choose
+            new AdminShopMenuGUI(plugin, admin).open();
+            sender.sendMessage(colorize("&a" + args[1] + " has " + shops.size() +
+                    " shops. Use the menu to select one."));
         }
-        sender.sendMessage(colorize("&cNo accessible shop locations found."));
     }
 
     /** /shop delete <shopId> */
@@ -163,6 +179,15 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
     private void cmdReload(CommandSender sender) {
         plugin.reload();
         sender.sendMessage(msg("reloaded"));
+    }
+
+    /** /shop menu — open the admin shop browser GUI */
+    private void cmdMenu(CommandSender sender) {
+        if (!(sender instanceof Player admin)) {
+            sender.sendMessage(colorize("&cOnly players can use this command."));
+            return;
+        }
+        new AdminShopMenuGUI(plugin, admin).open();
     }
 
     // -----------------------------------------------------------------------
@@ -220,5 +245,6 @@ public class ShopCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(colorize("  &f/shop tp <player>      &7- Teleport to player's shop"));
         sender.sendMessage(colorize("  &f/shop delete <shopId>  &7- Force-delete a shop"));
         sender.sendMessage(colorize("  &f/shop reload           &7- Reload config"));
+        sender.sendMessage(colorize("  &f/shop menu             &7- Open admin shop browser"));
     }
 }

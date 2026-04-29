@@ -45,8 +45,8 @@ dependencies {
     // HikariCP — shaded into the jar
     implementation("com.zaxxer:HikariCP:5.1.0")
 
-    // MariaDB JDBC driver — shaded into the jar
-    implementation("org.mariadb.jdbc:mariadb-java-client:3.4.1")
+    // MariaDB JDBC — compileOnly; downloaded at runtime by DriverDownloader
+    compileOnly("org.mariadb.jdbc:mariadb-java-client:3.4.1")
 }
 
 tasks {
@@ -63,7 +63,7 @@ tasks {
         archiveClassifier.set("")
 
         relocate("com.zaxxer.hikari", "com.oneblock.shops.libs.hikari")
-        relocate("org.mariadb.jdbc",  "com.oneblock.shops.libs.mariadb")
+        // MariaDB JDBC not shaded — provided by server libs/
 
         exclude("META-INF/*.SF")
         exclude("META-INF/*.DSA")

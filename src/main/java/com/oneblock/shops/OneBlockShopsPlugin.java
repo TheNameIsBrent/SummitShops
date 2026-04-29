@@ -4,6 +4,7 @@ import com.oneblock.shops.commands.ShopCommand;
 import com.oneblock.shops.economy.CurrencyRegistry;
 import com.oneblock.shops.hologram.HologramService;
 import com.oneblock.shops.listeners.ChunkLoadListener;
+import com.oneblock.shops.listeners.IslandOwnerListener;
 import com.oneblock.shops.listeners.ShopListener;
 import com.oneblock.shops.shop.ShopManager;
 import com.oneblock.shops.shop.ShopService;
@@ -68,6 +69,8 @@ public class OneBlockShopsPlugin extends JavaPlugin {
                 new ShopListener(this, shopManager, shopService, hologramService), this);
         getServer().getPluginManager().registerEvents(
                 new ChunkLoadListener(this, shopManager, hologramService), this);
+        getServer().getPluginManager().registerEvents(
+                new IslandOwnerListener(this), this);
 
         ShopCommand shopCommand = new ShopCommand(this, shopManager, shopService);
         getCommand("shop").setExecutor(shopCommand);

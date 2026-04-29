@@ -37,10 +37,11 @@ public class ShopEditorGUI implements Listener {
     private static final int SLOT_ITEM    = 10;
     private static final int SLOT_PRICE   = 13;
     private static final int SLOT_MODE    = 16;
-    private static final int SLOT_DEPOSIT = 31;
-    private static final int SLOT_BANK    = 34;
-    private static final int SLOT_CHEST   = 40;
-    private static final int SLOT_PICKUP  = 49;
+    private static final int SLOT_DEPOSIT  = 31;
+    private static final int SLOT_WITHDRAW = 33;
+    private static final int SLOT_BANK     = 34;
+    private static final int SLOT_CHEST    = 40;
+    private static final int SLOT_PICKUP   = 49;
 
     private final OneBlockShopsPlugin plugin;
     private final Player player;
@@ -116,6 +117,13 @@ public class ShopEditorGUI implements Listener {
                         color("&7Needed to pay sellers (SELL mode)"),
                         color("&eClick to deposit"))));
 
+        // Slot 33 — withdraw
+        inv.setItem(SLOT_WITHDRAW, make(Material.ORANGE_DYE,
+                color("&6Withdraw " + currName),
+                List.of(color("&7Take money from the shop bank"),
+                        color("&7Balance: &f" + fmt(shop.getBankBalance())),
+                        color("&eClick to withdraw"))));
+
         // Slot 34 — bank balance
         inv.setItem(SLOT_BANK, make(Material.GOLD_INGOT,
                 color("&6Bank: &f" + fmt(shop.getBankBalance()) + " " + currName),
@@ -155,11 +163,12 @@ public class ShopEditorGUI implements Listener {
             handleSetItem(event.getCursor());
         } else {
             switch (slot) {
-                case SLOT_PRICE   -> handleSetPrice();
-                case SLOT_MODE    -> handleToggleMode();
-                case SLOT_DEPOSIT -> handleDeposit();
-                case SLOT_CHEST   -> handleOpenChest();
-                case SLOT_PICKUP  -> handlePickup();
+                case SLOT_PRICE    -> handleSetPrice();
+                case SLOT_MODE     -> handleToggleMode();
+                case SLOT_DEPOSIT  -> handleDeposit();
+                case SLOT_WITHDRAW -> handleWithdraw();
+                case SLOT_CHEST    -> handleOpenChest();
+                case SLOT_PICKUP   -> handlePickup();
             }
         }
     }
@@ -183,6 +192,7 @@ public class ShopEditorGUI implements Listener {
             shop.setItem(toSet);
             // Do NOT clear the cursor — the player keeps their item.
             dirty();
+            plugin.getShopManager().refreshHologram(shop);
             player.sendMessage(color("&aShop item set to &f" + itemName(toSet) + "&a."));
         } else {
             // Empty cursor — just clear the shop's template (it was only a copy)
@@ -213,6 +223,7 @@ public class ShopEditorGUI implements Listener {
     private void handleToggleMode() {
         shop.setMode(shop.getMode() == ShopMode.BUY ? ShopMode.SELL : ShopMode.BUY);
         dirty();
+        plugin.getShopManager().refreshHologram(shop);
         fill();
     }
 
@@ -238,6 +249,24 @@ public class ShopEditorGUI implements Listener {
         });
     }
 
+    private void handleWithdraw() {
+        awaitChat("&6Enter amount to withdraw from the shop bank:", input -> {
+            try {
+                double amount = Double.parseDouble(input.trim());
+                if (amount <= 0) { player.sendMessage(color("&cAmount must be positive.")); return; }
+                boolean ok = plugin.getShopService().withdrawFromShopBank(player, shop, amount);
+                if (ok) {
+                    player.sendMessage(color("&aWithdrew &f" + fmt(amount) + "&a from the shop bank."));
+                } else {
+                    player.sendMessage(color("&cNot enough in the shop bank. Balance: &f"
+                            + fmt(shop.getBankBalance())));
+                }
+            } catch (NumberFormatException e) {
+                player.sendMessage(color("&cInvalid number."));
+            }
+        });
+    }
+
     private void handleOpenChest() {
         HandlerList.unregisterAll(this);
         player.closeInventory();
@@ -254,8 +283,12 @@ public class ShopEditorGUI implements Listener {
                     if (!e.getPlayer().getUniqueId().equals(player.getUniqueId())) return;
                     if (e.getInventory() != virtualInv) return;
                     HandlerList.unregisterAll(this);
-                    shop.setStockContents(e.getInventory().getContents().clone());
+                    org.bukkit.inventory.ItemStack[] before = shop.getStockContents();
+                    org.bukkit.inventory.ItemStack[] after  = e.getInventory().getContents().clone();
+                    logStockDiff(before, after);
+                    shop.setStockContents(after);
                     plugin.getShopManager().markDirty(shop);
+                    plugin.getShopManager().refreshHologram(shop);
                     plugin.getServer().getScheduler().runTaskLater(plugin,
                             () -> new ShopEditorGUI(plugin, player, shop).open(), 1L);
                 }
@@ -314,6 +347,34 @@ public class ShopEditorGUI implements Listener {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private void logStockDiff(org.bukkit.inventory.ItemStack[] before,
+                              org.bukkit.inventory.ItemStack[] after) {
+        // Count items added and removed by type
+        java.util.Map<String, Integer> delta = new java.util.LinkedHashMap<>();
+        int len = Math.max(before != null ? before.length : 0, after != null ? after.length : 0);
+        for (int i = 0; i < len; i++) {
+            org.bukkit.inventory.ItemStack b = (before != null && i < before.length) ? before[i] : null;
+            org.bukkit.inventory.ItemStack a = (after  != null && i < after.length)  ? after[i]  : null;
+            int bAmt = (b != null && b.getType() != org.bukkit.Material.AIR) ? b.getAmount() : 0;
+            int aAmt = (a != null && a.getType() != org.bukkit.Material.AIR) ? a.getAmount() : 0;
+            if (bAmt == aAmt) continue;
+            String key = itemLabel(a != null ? a : b);
+            delta.merge(key, aAmt - bAmt, Integer::sum);
+        }
+        for (java.util.Map.Entry<String, Integer> e : delta.entrySet()) {
+            int diff = e.getValue();
+            if (diff > 0) plugin.getTransactionLogger().logStockAdd(player, shop, e.getKey(), diff);
+            else if (diff < 0) plugin.getTransactionLogger().logStockRemove(player, shop, e.getKey(), -diff);
+        }
+    }
+
+    private static String itemLabel(org.bukkit.inventory.ItemStack item) {
+        if (item == null) return "AIR";
+        if (item.hasItemMeta() && item.getItemMeta().hasDisplayName())
+            return item.getItemMeta().getDisplayName().replaceAll("§.", "");
+        return item.getType().name();
+    }
 
     private void dirty() { plugin.getShopManager().markDirty(shop); }
 

@@ -22,6 +22,8 @@ public class Shop {
     private ShopMode mode;
     private String currencyId;
     private final long createdAt;
+    /** Short human-readable identifier (first 8 chars of UUID). */
+    private final String shortId;
     private double bankBalance;
     /** Virtual 6-row (54-slot) stock inventory for this shop. */
     private ItemStack[] stockContents;
@@ -44,6 +46,7 @@ public class Shop {
         this.createdAt = createdAt;
         this.bankBalance = bankBalance;
         this.stockContents = new ItemStack[54];
+        this.shortId = id.toString().substring(0, 8).toUpperCase();
     }
 
     /** Legacy constructor without bankBalance — defaults to 0. */
@@ -88,6 +91,7 @@ public class Shop {
     }
 
     public UUID getId() { return id; }
+    public String getShortId() { return shortId; }
     public UUID getOwnerUUID() { return ownerUUID; }
     public void setOwnerUUID(UUID v) { this.ownerUUID = v; }
     public String getWorldName() { return worldName; }
