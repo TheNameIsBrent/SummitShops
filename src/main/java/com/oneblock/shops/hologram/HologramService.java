@@ -40,9 +40,6 @@ public class HologramService {
     private static final String PDC_KEY      = "shop_hologram_id";
     private static final String PDC_ITEM_KEY = "shop_item_display_id";
 
-    /** Item display floats this many blocks below the text display. */
-    private static final double ITEM_BELOW_TEXT = 0.85;
-
     private final OneBlockShopsPlugin plugin;
     /** shopId → Bukkit task ID for the item spin animation. */
     private final Map<UUID, Integer> spinTasks = new HashMap<>();
@@ -115,7 +112,7 @@ public class HologramService {
 
     private void spawnText(Shop shop, Location base) {
         World world = base.getWorld();
-        double textYOffset = plugin.getConfig().getDouble("hologram.y-offset", 2.0);
+        double textYOffset = plugin.getConfig().getDouble("hologram.text-y-offset", 1.5);
         Location loc = base.clone();
         loc.setY(base.getY() + textYOffset);
 
@@ -148,9 +145,9 @@ public class HologramService {
         World world = base.getWorld();
         if (world == null) return;
 
-        double textYOffset = plugin.getConfig().getDouble("hologram.y-offset", 2.0);
+        double itemYOffset = plugin.getConfig().getDouble("hologram.item-y-offset", 0.8);
         Location loc = base.clone();
-        loc.setY(base.getY() + textYOffset - ITEM_BELOW_TEXT);
+        loc.setY(base.getY() + itemYOffset);
 
         ItemDisplay id = (ItemDisplay) world.spawnEntity(loc, EntityType.ITEM_DISPLAY);
         id.setItemStack(item.clone());

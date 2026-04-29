@@ -24,8 +24,10 @@ default-currency: vault_money
 
 # Hologram settings
 hologram:
-  # Vertical offset above the shop block where hologram text starts
-  y-offset: 1.5
+  # Vertical offset above the shop block where the text hologram appears
+  text-y-offset: 1.5
+  # Vertical offset above the shop block where the floating item appears
+  item-y-offset: 0.8
   # Lines shown on the hologram. Variables: {item}, {price}, {currency}, {mode}, {stock}, {bank}
   # Edit these to reshape what the hologram shows and in what order.
   lines:
