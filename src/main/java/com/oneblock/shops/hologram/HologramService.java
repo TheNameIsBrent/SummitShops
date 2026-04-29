@@ -40,12 +40,12 @@ public class HologramService {
     private static final String PDC_KEY      = "shop_hologram_id";
     private static final String PDC_ITEM_KEY = "shop_item_display_id";
 
-    /** How far above the block the text display sits. */
-    private static final double TEXT_Y_OFFSET = 2.0;
-    /** How far above the block the item display sits. */
-    private static final double ITEM_Y_OFFSET = 1.15;
+    /** Item display floats this many blocks below the text display. */
+    private static final double ITEM_BELOW_TEXT = 0.85;
 
     private final OneBlockShopsPlugin plugin;
+    /** shopId → Bukkit task ID for the item spin animation. */
+    private final Map<UUID, Integer> spinTasks = new HashMap<>();
 
     public HologramService(OneBlockShopsPlugin plugin) {
         this.plugin = plugin;
@@ -103,7 +103,11 @@ public class HologramService {
         });
     }
 
-    public void shutdown() { /* Display entities persist on their own */ }
+    public void shutdown() {
+        // Cancel all spin tasks
+        spinTasks.values().forEach(id -> plugin.getServer().getScheduler().cancelTask(id));
+        spinTasks.clear();
+    }
 
     // -----------------------------------------------------------------------
     // Spawning
@@ -111,8 +115,9 @@ public class HologramService {
 
     private void spawnText(Shop shop, Location base) {
         World world = base.getWorld();
+        double textYOffset = plugin.getConfig().getDouble("hologram.y-offset", 2.0);
         Location loc = base.clone();
-        loc.setY(base.getY() + TEXT_Y_OFFSET);
+        loc.setY(base.getY() + textYOffset);
 
         TextDisplay td = (TextDisplay) world.spawnEntity(loc, EntityType.TEXT_DISPLAY);
 
@@ -143,8 +148,9 @@ public class HologramService {
         World world = base.getWorld();
         if (world == null) return;
 
+        double textYOffset = plugin.getConfig().getDouble("hologram.y-offset", 2.0);
         Location loc = base.clone();
-        loc.setY(base.getY() + ITEM_Y_OFFSET);
+        loc.setY(base.getY() + textYOffset - ITEM_BELOW_TEXT);
 
         ItemDisplay id = (ItemDisplay) world.spawnEntity(loc, EntityType.ITEM_DISPLAY);
         id.setItemStack(item.clone());
@@ -165,6 +171,20 @@ public class HologramService {
                 new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY),
                 org.bukkit.persistence.PersistentDataType.STRING,
                 shop.getId().toString());
+
+        // Start spin animation — rotate 5° per tick (one full revolution ~1.2 s)
+        final float[] yaw = {0f};
+        int taskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (!id.isValid()) return;
+            yaw[0] = (yaw[0] + 5f) % 360f;
+            float rad = (float) Math.toRadians(yaw[0]);
+            id.setTransformation(new Transformation(
+                    new Vector3f(0, 0, 0),
+                    new AxisAngle4f(0, 0, 1, 0),
+                    new Vector3f(0.6f, 0.6f, 0.6f),
+                    new AxisAngle4f(rad, 0, 1, 0)));
+        }, 1L, 1L).getTaskId();
+        spinTasks.put(shop.getId(), taskId);
     }
 
     // -----------------------------------------------------------------------
@@ -172,6 +192,10 @@ public class HologramService {
     // -----------------------------------------------------------------------
 
     private void worldScanRemove(UUID shopId) {
+        // Cancel spin task first
+        Integer taskId = spinTasks.remove(shopId);
+        if (taskId != null) plugin.getServer().getScheduler().cancelTask(taskId);
+
         String idStr = shopId.toString();
         org.bukkit.NamespacedKey textKey = new org.bukkit.NamespacedKey(plugin, PDC_KEY);
         org.bukkit.NamespacedKey itemKey = new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY);
