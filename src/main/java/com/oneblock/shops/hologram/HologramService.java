@@ -11,7 +11,6 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.TextDisplay;
-import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Transformation;
 import org.joml.AxisAngle4f;
 import org.joml.Vector3f;
@@ -21,19 +20,11 @@ import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**
- * Manages shop holograms using Paper 1.19.4+ Display entities (TextDisplay +
- * ItemDisplay). These have zero client-side flicker because they have no
- * physical geometry — unlike ArmorStands, the client never briefly renders
- * a visible body before the invisible flag arrives.
+ * Manages shop holograms using Paper 1.19.4+ Display entities.
  *
- * Layout above each shop block (y increases upward):
- *
- *   [TextDisplay]  — all hologram lines as one multi-line Component
- *   [ItemDisplay]  — floating copy of the shop's trade item
- *   [END_PORTAL_FRAME block]
- *
- * Both entities are tagged with PDC key "shop_hologram_id" → shop UUID string
- * so they survive server restarts and can be found/removed reliably.
+ * NO server-side spin tasks or teleports. The ItemDisplay uses
+ * Billboard.VERTICAL so the Minecraft client handles rotation
+ * automatically — zero server overhead.
  */
 public class HologramService {
 
@@ -41,8 +32,6 @@ public class HologramService {
     public static final String PDC_ITEM_KEY = "shop_item_display_id";
 
     private final OneBlockShopsPlugin plugin;
-    /** shopId → Bukkit task ID for the item spin animation. */
-    private final Map<UUID, Integer> spinTasks = new HashMap<>();
 
     public HologramService(OneBlockShopsPlugin plugin) {
         this.plugin = plugin;
@@ -56,13 +45,10 @@ public class HologramService {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             try {
                 worldScanRemove(shop.getId());
-
                 Location base = shopBase(shop);
                 if (base == null || base.getWorld() == null) return;
-
                 spawnText(shop, base);
                 spawnItemDisplay(shop, base);
-
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING,
                         "[HologramService] createOrUpdate failed for " + shop.getId(), e);
@@ -74,7 +60,6 @@ public class HologramService {
         plugin.getServer().getScheduler().runTask(plugin, () -> worldScanRemove(shop.getId()));
     }
 
-    /** One-time orphan cleanup on world load — cheap because it only runs once per world. */
     public void cleanupOrphans(World world) {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             Set<UUID> known = plugin.getShopManager().getAllShops()
@@ -85,11 +70,8 @@ public class HologramService {
 
             for (Entity e : world.getEntities()) {
                 String tag = null;
-                if (e instanceof TextDisplay td) {
-                    tag = pdc(td, textKey);
-                } else if (e instanceof ItemDisplay id) {
-                    tag = pdc(id, itemKey);
-                }
+                if (e instanceof TextDisplay td) tag = pdc(td, textKey);
+                else if (e instanceof ItemDisplay id) tag = pdc(id, itemKey);
                 if (tag == null) continue;
                 try {
                     if (!known.contains(UUID.fromString(tag))) e.remove();
@@ -100,11 +82,8 @@ public class HologramService {
         });
     }
 
-    public void shutdown() {
-        // Cancel all spin tasks
-        spinTasks.values().forEach(id -> plugin.getServer().getScheduler().cancelTask(id));
-        spinTasks.clear();
-    }
+    /** Nothing to shut down — no scheduled tasks exist. */
+    public void shutdown() {}
 
     // -----------------------------------------------------------------------
     // Spawning
@@ -112,27 +91,21 @@ public class HologramService {
 
     private void spawnText(Shop shop, Location base) {
         World world = base.getWorld();
-        double textYOffset = plugin.getConfig().getDouble("hologram.text-y-offset", 1.5);
+        double yOffset = plugin.getConfig().getDouble("hologram.text-y-offset", 1.5);
         Location loc = base.clone();
-        loc.setY(base.getY() + textYOffset);
+        loc.setY(base.getY() + yOffset);
 
         TextDisplay td = (TextDisplay) world.spawnEntity(loc, EntityType.TEXT_DISPLAY);
-
-        // Build the full text as a legacy-color string then convert to Component
-        String raw = buildText(shop);
         td.text(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
-                .legacyAmpersand().deserialize(raw));
-
+                .legacyAmpersand().deserialize(buildText(shop)));
         td.setAlignment(TextDisplay.TextAlignment.CENTER);
-        td.setBillboard(Display.Billboard.CENTER);   // always faces player
-        td.setBackgroundColor(org.bukkit.Color.fromARGB(0, 0, 0, 0)); // fully transparent background
+        td.setBillboard(Display.Billboard.CENTER);
+        td.setBackgroundColor(org.bukkit.Color.fromARGB(0, 0, 0, 0));
         td.setSeeThrough(false);
         td.setDefaultBackground(false);
         td.setGravity(false);
         td.setInvulnerable(true);
         td.setPersistent(true);
-
-        // Tag so we can find it after restarts
         td.getPersistentDataContainer().set(
                 new org.bukkit.NamespacedKey(plugin, PDC_KEY),
                 org.bukkit.persistence.PersistentDataType.STRING,
@@ -140,65 +113,32 @@ public class HologramService {
     }
 
     private void spawnItemDisplay(Shop shop, Location base) {
-        ItemStack item = shop.getItem();
-        if (item == null) return;
+        if (shop.getItem() == null) return;
         World world = base.getWorld();
         if (world == null) return;
 
-        double itemYOffset = plugin.getConfig().getDouble("hologram.item-y-offset", 0.8);
+        double yOffset = plugin.getConfig().getDouble("hologram.item-y-offset", 0.75);
         Location loc = base.clone();
-        loc.setY(base.getY() + itemYOffset);
+        loc.setY(base.getY() + yOffset);
 
         ItemDisplay id = (ItemDisplay) world.spawnEntity(loc, EntityType.ITEM_DISPLAY);
-        id.setItemStack(item.clone());
-        id.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.GROUND);
-        id.setBillboard(Display.Billboard.VERTICAL); // spins on Y axis naturally
-        id.setGravity(false);
-        id.setInvulnerable(true);
-        id.setPersistent(true);
+        id.setItemStack(shop.getItem().clone());
 
-        // Slight scale-up so it's visible
+        // VERTICAL billboard = client auto-rotates on Y axis. No server tasks needed.
+        id.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.GROUND);
+        id.setBillboard(Display.Billboard.VERTICAL);
         id.setTransformation(new Transformation(
                 new Vector3f(0, 0, 0),
                 new AxisAngle4f(0, 0, 1, 0),
                 new Vector3f(0.6f, 0.6f, 0.6f),
                 new AxisAngle4f(0, 0, 1, 0)));
-
+        id.setGravity(false);
+        id.setInvulnerable(true);
+        id.setPersistent(true);
         id.getPersistentDataContainer().set(
                 new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY),
                 org.bukkit.persistence.PersistentDataType.STRING,
                 shop.getId().toString());
-
-        // Spin + bob animation.
-        // Updates every 3 ticks, client interpolates smoothly over those 3 ticks.
-        // 6° per update → ~1 full revolution per ~10 s (slow, classic feel).
-        // Bob: sinusoidal Y translation over a 4-second cycle (80 ticks).
-        final double BASE_ITEM_Y = base.getY() + plugin.getConfig().getDouble("hologram.item-y-offset", 0.8);
-        final double BOB_AMPLITUDE = 0.12; // blocks up/down
-        final int    INTERVAL      = 3;    // ticks between server updates
-        final float  DEG_PER_UPDATE = 6f;
-        final long[] tick = {0L};
-        final float[] yaw = {0f};
-        id.setInterpolationDelay(0);
-        id.setInterpolationDuration(INTERVAL);
-        int taskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
-            if (!id.isValid()) return;
-            tick[0]++;
-            yaw[0] = (yaw[0] + DEG_PER_UPDATE) % 360f;
-            float rad = (float) Math.toRadians(yaw[0]);
-            // Bob: sin wave with 80-tick period
-            double bobY = BOB_AMPLITUDE * Math.sin(2 * Math.PI * tick[0] / 80.0);
-            id.teleport(new Location(id.getWorld(), id.getLocation().getX(),
-                    BASE_ITEM_Y + bobY, id.getLocation().getZ(),
-                    id.getLocation().getYaw(), id.getLocation().getPitch()));
-            id.setInterpolationDelay(0);
-            id.setTransformation(new Transformation(
-                    new Vector3f(0, 0, 0),
-                    new AxisAngle4f(0, 0, 1, 0),
-                    new Vector3f(0.6f, 0.6f, 0.6f),
-                    new AxisAngle4f(rad, 0, 1, 0)));
-        }, 1L, INTERVAL).getTaskId();
-        spinTasks.put(shop.getId(), taskId);
     }
 
     // -----------------------------------------------------------------------
@@ -206,10 +146,6 @@ public class HologramService {
     // -----------------------------------------------------------------------
 
     private void worldScanRemove(UUID shopId) {
-        // Cancel spin task first
-        Integer taskId = spinTasks.remove(shopId);
-        if (taskId != null) plugin.getServer().getScheduler().cancelTask(taskId);
-
         String idStr = shopId.toString();
         org.bukkit.NamespacedKey textKey = new org.bukkit.NamespacedKey(plugin, PDC_KEY);
         org.bukkit.NamespacedKey itemKey = new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY);
@@ -218,15 +154,15 @@ public class HologramService {
             for (Entity e : world.getEntities()) {
                 if (e instanceof TextDisplay td && idStr.equals(pdc(td, textKey))) {
                     td.remove();
-                } else if (e instanceof ItemDisplay id && idStr.equals(pdc(id, itemKey))) {
-                    id.remove();
+                } else if (e instanceof ItemDisplay disp && idStr.equals(pdc(disp, itemKey))) {
+                    disp.remove();
                 }
             }
         }
     }
 
     // -----------------------------------------------------------------------
-    // Content
+    // Text content
     // -----------------------------------------------------------------------
 
     private String buildText(Shop shop) {
@@ -242,8 +178,7 @@ public class HologramService {
 
         Optional<CurrencyProvider> provOpt = plugin.getCurrencyRegistry()
                 .getProvider(shop.getCurrencyId());
-        String currName = provOpt.map(CurrencyProvider::getDisplayName)
-                .orElse(shop.getCurrencyId());
+        String currName = provOpt.map(CurrencyProvider::getDisplayName).orElse(shop.getCurrencyId());
         String priceStr = shop.isConfigured() ? fmt(shop.getPrice()) : "&cnot set";
         String modeStr  = shop.getMode() == ShopMode.BUY ? "&a▶ BUY" : "&c◀ SELL";
         int    stock    = getStockSafe(shop);
@@ -252,9 +187,13 @@ public class HologramService {
 
         List<String> template = plugin.getConfig().getStringList("hologram.lines");
         if (template.isEmpty()) {
-            template = java.util.Arrays.asList(
-                    "&6&l✦ Shop ✦", "&f{item}", "&e{price} {currency}",
-                    "{mode}", "&7Stock: &f{stock}", "&7Bank: &f{bank} {currency}");
+            template = List.of(
+                    "&6&l✦ Shop ✦",
+                    "&f{item}",
+                    "&e{price} {currency}",
+                    "{mode}",
+                    "&7Stock: &f{stock}",
+                    "&7Bank: &f{bank} {currency}");
         }
 
         StringBuilder sb = new StringBuilder();
@@ -276,9 +215,7 @@ public class HologramService {
     // -----------------------------------------------------------------------
 
     private Location shopBase(Shop shop) {
-        Location loc = shop.getLocation(); // already centred on block
-        if (loc == null) return null;
-        return loc; // y-offsets applied per-entity above
+        return shop.getLocation();
     }
 
     private int getStockSafe(Shop shop) {
