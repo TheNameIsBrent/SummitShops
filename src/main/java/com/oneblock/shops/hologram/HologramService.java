@@ -5,28 +5,47 @@ import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopMode;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.World;
-import org.bukkit.entity.ArmorStand;
+import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Item;
+import org.bukkit.entity.ItemDisplay;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.util.Transformation;
+import org.joml.AxisAngle4f;
+import org.joml.Vector3f;
 
 import java.util.*;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
+/**
+ * Manages shop holograms using Paper 1.19.4+ Display entities (TextDisplay +
+ * ItemDisplay). These have zero client-side flicker because they have no
+ * physical geometry — unlike ArmorStands, the client never briefly renders
+ * a visible body before the invisible flag arrives.
+ *
+ * Layout above each shop block (y increases upward):
+ *
+ *   [TextDisplay]  — all hologram lines as one multi-line Component
+ *   [ItemDisplay]  — floating copy of the shop's trade item
+ *   [END_PORTAL_FRAME block]
+ *
+ * Both entities are tagged with PDC key "shop_hologram_id" → shop UUID string
+ * so they survive server restarts and can be found/removed reliably.
+ */
 public class HologramService {
 
-    private static final double LINE_GAP  = 0.27;
-    private static final double ITEM_OFFSET = -0.3; // y offset of floating item below hologram base
-    public  static final String PDC_KEY   = "shop_hologram_id";
+    private static final String PDC_KEY      = "shop_hologram_id";
+    private static final String PDC_ITEM_KEY = "shop_item_display_id";
+
+    /** How far above the block the text display sits. */
+    private static final double TEXT_Y_OFFSET = 2.0;
+    /** How far above the block the item display sits. */
+    private static final double ITEM_Y_OFFSET = 1.15;
 
     private final OneBlockShopsPlugin plugin;
-    /** shopId → list of armorstand UUIDs (runtime cache only; rebuilt on reload) */
-    private final Map<UUID, List<UUID>> holoStands = new HashMap<>();
-    /** shopId → floating item entity UUID */
-    private final Map<UUID, UUID> floatItems = new HashMap<>();
 
     public HologramService(OneBlockShopsPlugin plugin) {
         this.plugin = plugin;
@@ -39,26 +58,13 @@ public class HologramService {
     public void createOrUpdate(Shop shop) {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             try {
-                // Always do a world-scan remove first so reloads don't duplicate stands
                 worldScanRemove(shop.getId());
 
-                Location baseLoc = hologramBase(shop);
-                if (baseLoc == null || baseLoc.getWorld() == null) return;
+                Location base = shopBase(shop);
+                if (base == null || base.getWorld() == null) return;
 
-                List<String> lines   = buildLines(shop);
-                List<UUID>   standIds = new ArrayList<>();
-                double topY = baseLoc.getY() + (lines.size() - 1) * LINE_GAP;
-
-                for (int i = 0; i < lines.size(); i++) {
-                    Location spawnLoc = baseLoc.clone();
-                    spawnLoc.setY(topY - i * LINE_GAP);
-                    ArmorStand stand = spawnStand(spawnLoc, lines.get(i), shop.getId());
-                    if (stand != null) standIds.add(stand.getUniqueId());
-                }
-                holoStands.put(shop.getId(), standIds);
-
-                // Floating item between frame and hologram
-                spawnFloatingItem(shop, baseLoc);
+                spawnText(shop, base);
+                spawnItemDisplay(shop, base);
 
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING,
@@ -71,132 +77,121 @@ public class HologramService {
         plugin.getServer().getScheduler().runTask(plugin, () -> worldScanRemove(shop.getId()));
     }
 
-    /** Called on chunk load to clean up orphaned stands with no matching shop. */
+    /** One-time orphan cleanup on world load — cheap because it only runs once per world. */
     public void cleanupOrphans(World world) {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
-            Set<UUID> knownIds = plugin.getShopManager().getAllShops()
-                    .stream().map(Shop::getId)
-                    .collect(java.util.stream.Collectors.toSet());
-            for (Entity entity : world.getEntities()) {
-                if (entity instanceof ArmorStand stand) {
-                    String tag = getShopTag(stand);
-                    if (tag == null) continue;
-                    try {
-                        UUID shopId = UUID.fromString(tag);
-                        if (!knownIds.contains(shopId)) stand.remove();
-                    } catch (IllegalArgumentException ignored) { stand.remove(); }
-                } else if (entity instanceof Item item) {
-                    String tag = getItemTag(item);
-                    if (tag == null) continue;
-                    try {
-                        UUID shopId = UUID.fromString(tag);
-                        if (!knownIds.contains(shopId)) item.remove();
-                    } catch (IllegalArgumentException ignored) { item.remove(); }
+            Set<UUID> known = plugin.getShopManager().getAllShops()
+                    .stream().map(Shop::getId).collect(Collectors.toSet());
+
+            org.bukkit.NamespacedKey textKey = new org.bukkit.NamespacedKey(plugin, PDC_KEY);
+            org.bukkit.NamespacedKey itemKey = new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY);
+
+            for (Entity e : world.getEntities()) {
+                String tag = null;
+                if (e instanceof TextDisplay td) {
+                    tag = pdc(td, textKey);
+                } else if (e instanceof ItemDisplay id) {
+                    tag = pdc(id, itemKey);
+                }
+                if (tag == null) continue;
+                try {
+                    if (!known.contains(UUID.fromString(tag))) e.remove();
+                } catch (IllegalArgumentException ignored) {
+                    e.remove();
                 }
             }
         });
     }
 
-    public void shutdown() {
-        holoStands.clear();
-        floatItems.clear();
+    public void shutdown() { /* Display entities persist on their own */ }
+
+    // -----------------------------------------------------------------------
+    // Spawning
+    // -----------------------------------------------------------------------
+
+    private void spawnText(Shop shop, Location base) {
+        World world = base.getWorld();
+        Location loc = base.clone();
+        loc.setY(base.getY() + TEXT_Y_OFFSET);
+
+        TextDisplay td = (TextDisplay) world.spawnEntity(loc, EntityType.TEXT_DISPLAY);
+
+        // Build the full text as a legacy-color string then convert to Component
+        String raw = buildText(shop);
+        td.text(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
+                .legacyAmpersand().deserialize(raw));
+
+        td.setAlignment(TextDisplay.TextAlignment.CENTER);
+        td.setBillboard(Display.Billboard.CENTER);   // always faces player
+        td.setBackgroundColor(org.bukkit.Color.fromARGB(0, 0, 0, 0)); // fully transparent background
+        td.setSeeThrough(false);
+        td.setDefaultBackground(false);
+        td.setGravity(false);
+        td.setInvulnerable(true);
+        td.setPersistent(true);
+
+        // Tag so we can find it after restarts
+        td.getPersistentDataContainer().set(
+                new org.bukkit.NamespacedKey(plugin, PDC_KEY),
+                org.bukkit.persistence.PersistentDataType.STRING,
+                shop.getId().toString());
+    }
+
+    private void spawnItemDisplay(Shop shop, Location base) {
+        ItemStack item = shop.getItem();
+        if (item == null) return;
+        World world = base.getWorld();
+        if (world == null) return;
+
+        Location loc = base.clone();
+        loc.setY(base.getY() + ITEM_Y_OFFSET);
+
+        ItemDisplay id = (ItemDisplay) world.spawnEntity(loc, EntityType.ITEM_DISPLAY);
+        id.setItemStack(item.clone());
+        id.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.GROUND);
+        id.setBillboard(Display.Billboard.VERTICAL); // spins on Y axis naturally
+        id.setGravity(false);
+        id.setInvulnerable(true);
+        id.setPersistent(true);
+
+        // Slight scale-up so it's visible
+        id.setTransformation(new Transformation(
+                new Vector3f(0, 0, 0),
+                new AxisAngle4f(0, 0, 1, 0),
+                new Vector3f(0.6f, 0.6f, 0.6f),
+                new AxisAngle4f(0, 0, 1, 0)));
+
+        id.getPersistentDataContainer().set(
+                new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY),
+                org.bukkit.persistence.PersistentDataType.STRING,
+                shop.getId().toString());
     }
 
     // -----------------------------------------------------------------------
-    // Internal — stand management
+    // Removal
     // -----------------------------------------------------------------------
 
-    /**
-     * Removes ALL entities in any loaded world that are tagged with this shopId.
-     * This is robust to server restarts (stands re-persist), unlike the in-memory map.
-     */
     private void worldScanRemove(UUID shopId) {
         String idStr = shopId.toString();
+        org.bukkit.NamespacedKey textKey = new org.bukkit.NamespacedKey(plugin, PDC_KEY);
+        org.bukkit.NamespacedKey itemKey = new org.bukkit.NamespacedKey(plugin, PDC_ITEM_KEY);
+
         for (World world : plugin.getServer().getWorlds()) {
-            for (Entity entity : world.getEntities()) {
-                if (entity instanceof ArmorStand stand) {
-                    if (idStr.equals(getShopTag(stand))) stand.remove();
-                } else if (entity instanceof Item item) {
-                    if (idStr.equals(getItemTag(item))) item.remove();
+            for (Entity e : world.getEntities()) {
+                if (e instanceof TextDisplay td && idStr.equals(pdc(td, textKey))) {
+                    td.remove();
+                } else if (e instanceof ItemDisplay id && idStr.equals(pdc(id, itemKey))) {
+                    id.remove();
                 }
             }
         }
-        holoStands.remove(shopId);
-        floatItems.remove(shopId);
-    }
-
-    private ArmorStand spawnStand(Location loc, String displayName, UUID shopId) {
-        World world = loc.getWorld();
-        if (world == null) return null;
-        ArmorStand stand = (ArmorStand) world.spawnEntity(loc, EntityType.ARMOR_STAND);
-        stand.setVisible(false);
-        stand.setCustomNameVisible(true);
-        stand.setCustomName(colorize(displayName));
-        stand.setGravity(false);
-        stand.setInvulnerable(true);
-        stand.setPersistent(true);
-        stand.setMarker(true);
-        stand.setSmall(true);
-        stand.setCollidable(false);
-        // Tag with shop ID so we can find & remove it after restarts
-        tagEntity(stand, shopId);
-        return stand;
-    }
-
-    private void spawnFloatingItem(Shop shop, Location baseLoc) {
-        if (shop.getItem() == null) return;
-        World world = baseLoc.getWorld();
-        if (world == null) return;
-
-        // Place item halfway between portal frame top and hologram bottom
-        Location itemLoc = baseLoc.clone();
-        itemLoc.setY(baseLoc.getY() + ITEM_OFFSET);
-
-        Item floatItem = world.dropItem(itemLoc, shop.getItem().clone());
-        floatItem.setPickupDelay(Integer.MAX_VALUE);
-        floatItem.setGravity(false);
-        floatItem.setInvulnerable(true);
-        floatItem.setPersistent(true);
-        floatItem.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
-        // Tag so we can find it on restart
-        floatItem.getPersistentDataContainer().set(
-                new org.bukkit.NamespacedKey(plugin, "shop_float_id"),
-                org.bukkit.persistence.PersistentDataType.STRING,
-                shop.getId().toString());
-        floatItems.put(shop.getId(), floatItem.getUniqueId());
     }
 
     // -----------------------------------------------------------------------
-    // Tag helpers
+    // Content
     // -----------------------------------------------------------------------
 
-    private void tagEntity(ArmorStand stand, UUID shopId) {
-        stand.getPersistentDataContainer().set(
-                new org.bukkit.NamespacedKey(plugin, PDC_KEY),
-                org.bukkit.persistence.PersistentDataType.STRING,
-                shopId.toString());
-    }
-
-    private String getShopTag(ArmorStand stand) {
-        org.bukkit.NamespacedKey key = new org.bukkit.NamespacedKey(plugin, PDC_KEY);
-        if (!stand.getPersistentDataContainer().has(key, org.bukkit.persistence.PersistentDataType.STRING))
-            return null;
-        return stand.getPersistentDataContainer().get(key, org.bukkit.persistence.PersistentDataType.STRING);
-    }
-
-    private String getItemTag(Item item) {
-        org.bukkit.NamespacedKey key = new org.bukkit.NamespacedKey(plugin, "shop_float_id");
-        if (!item.getPersistentDataContainer().has(key, org.bukkit.persistence.PersistentDataType.STRING))
-            return null;
-        return item.getPersistentDataContainer().get(key, org.bukkit.persistence.PersistentDataType.STRING);
-    }
-
-    // -----------------------------------------------------------------------
-    // Hologram content
-    // -----------------------------------------------------------------------
-
-    private List<String> buildLines(Shop shop) {
-        // Resolve variables once
+    private String buildText(Shop shop) {
         String itemName;
         if (shop.getItem() != null && shop.getItem().hasItemMeta()
                 && shop.getItem().getItemMeta().hasDisplayName()) {
@@ -207,34 +202,45 @@ public class HologramService {
             itemName = "&7Not configured";
         }
 
-        Optional<CurrencyProvider> provOpt = plugin.getCurrencyRegistry().getProvider(shop.getCurrencyId());
-        String currName = provOpt.map(CurrencyProvider::getDisplayName).orElse(shop.getCurrencyId());
+        Optional<CurrencyProvider> provOpt = plugin.getCurrencyRegistry()
+                .getProvider(shop.getCurrencyId());
+        String currName = provOpt.map(CurrencyProvider::getDisplayName)
+                .orElse(shop.getCurrencyId());
         String priceStr = shop.isConfigured() ? fmt(shop.getPrice()) : "&cnot set";
         String modeStr  = shop.getMode() == ShopMode.BUY ? "&a▶ BUY" : "&c◀ SELL";
-        int stock = getStockSafe(shop);
+        int    stock    = getStockSafe(shop);
         String stockStr = stock < 0 ? "?" : String.valueOf(stock);
         String bankStr  = fmt(shop.getBankBalance());
 
-        // Load template lines from config (admins can reshape the hologram by editing config.yml)
         List<String> template = plugin.getConfig().getStringList("hologram.lines");
         if (template.isEmpty()) {
-            // Sensible defaults if config section missing
             template = java.util.Arrays.asList(
-                "&6&l✦ Shop ✦", "&f{item}", "&e{price} {currency}",
-                "{mode}", "&7Stock/Space: &f{stock}", "&7Bank: &f{bank} {currency}");
+                    "&6&l✦ Shop ✦", "&f{item}", "&e{price} {currency}",
+                    "{mode}", "&7Stock: &f{stock}", "&7Bank: &f{bank} {currency}");
         }
 
-        List<String> lines = new ArrayList<>();
-        for (String tpl : template) {
-            lines.add(tpl
-                .replace("{item}",     itemName)
-                .replace("{price}",    priceStr)
-                .replace("{currency}", currName)
-                .replace("{mode}",     modeStr)
-                .replace("{stock}",    stockStr)
-                .replace("{bank}",     bankStr));
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < template.size(); i++) {
+            if (i > 0) sb.append("\n");
+            sb.append(template.get(i)
+                    .replace("{item}",     itemName)
+                    .replace("{price}",    priceStr)
+                    .replace("{currency}", currName)
+                    .replace("{mode}",     modeStr)
+                    .replace("{stock}",    stockStr)
+                    .replace("{bank}",     bankStr));
         }
-        return lines;
+        return sb.toString();
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    private Location shopBase(Shop shop) {
+        Location loc = shop.getLocation(); // already centred on block
+        if (loc == null) return null;
+        return loc; // y-offsets applied per-entity above
     }
 
     private int getStockSafe(Shop shop) {
@@ -245,14 +251,12 @@ public class HologramService {
         } catch (Exception e) { return -1; }
     }
 
-    private Location hologramBase(Shop shop) {
-        Location loc = shop.getLocation();
-        if (loc == null) return null;
-        double yOffset = plugin.getConfig().getDouble("hologram.y-offset", 1.5);
-        return loc.clone().add(0, yOffset, 0);
+    private static String pdc(Entity e, org.bukkit.NamespacedKey key) {
+        if (!e.getPersistentDataContainer().has(key,
+                org.bukkit.persistence.PersistentDataType.STRING)) return null;
+        return e.getPersistentDataContainer().get(key,
+                org.bukkit.persistence.PersistentDataType.STRING);
     }
-
-    private static String colorize(String s) { return s.replace("&", "\u00A7"); }
 
     private static String prettify(String enumName) {
         String lower = enumName.replace("_", " ").toLowerCase(Locale.ROOT);
