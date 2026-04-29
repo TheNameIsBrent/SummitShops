@@ -11,7 +11,7 @@ import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityRemoveFromWorldEvent;
+import org.bukkit.event.entity.EntityRemoveEvent;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.Optional;
@@ -44,7 +44,7 @@ public class HologramProtectionListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
-    public void onEntityRemove(EntityRemoveFromWorldEvent event) {
+    public void onEntityRemove(EntityRemoveEvent event) {
         Entity entity = event.getEntity();
 
         // Only care about our hologram entities
