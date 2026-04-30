@@ -4,13 +4,11 @@ import com.oneblock.shops.OneBlockShopsPlugin;
 import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopMode;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.EntityType;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -22,12 +20,12 @@ import java.util.stream.Collectors;
 /**
  * ArmorStand hologram service.
  *
- * Uses reflection to call CraftWorld.addEntityToWorld() directly,
- * bypassing the Bukkit spawn path and CreatureSpawnEvent entirely.
- * This means MythicMobs and other plugins never see these spawns.
+ * Uses pure reflection (no compile-time NMS dependencies) to call
+ * CraftWorld.addEntityToWorld() directly, bypassing CreatureSpawnEvent
+ * entirely so MythicMobs and other plugins never intercept our spawns.
  *
- * All entities: persistent=false so they are never saved to disk.
- * Single global animation task for all item stands.
+ * All entities are non-persistent — never written to disk.
+ * One global animation task drives all item stands.
  */
 public class HologramService {
 
@@ -47,8 +45,15 @@ public class HologramService {
     private long globalTick   = 0;
     private int  globalTaskId = -1;
 
-    // Reflection handle for CraftWorld.addEntityToWorld(Entity, SpawnReason)
-    private Method addEntityToWorld = null;
+    // Reflection handles — resolved once at startup
+    private Method craftWorldAddEntity   = null; // CraftWorld.addEntityToWorld(NMSEntity, SpawnReason)
+    private Method craftWorldGetHandle   = null; // CraftWorld.getHandle() → ServerLevel
+    private Method nmsLevelCreateEntity  = null; // EntityType.create(ServerLevel) or constructor
+    private Object nmsArmorStandType     = null; // net.minecraft.world.entity.EntityType.ARMOR_STAND
+    private Method nmsEntitySetPos       = null; // NMSEntity.setPos(double,double,double)
+    private Method nmsEntitySetYRot      = null; // NMSEntity.setYRot(float)
+    private Method nmsEntityGetBukkit    = null; // NMSEntity.getBukkitEntity()
+    private boolean reflectionReady      = false;
 
     public HologramService(OneBlockShopsPlugin plugin) {
         this.plugin = plugin;
@@ -57,54 +62,88 @@ public class HologramService {
 
     private void initReflection() {
         try {
-            // CraftWorld.addEntityToWorld is package-private — get it via reflection
-            Class<?> craftWorldClass = Bukkit.getWorld("world") != null
-                    ? Bukkit.getServer().getWorlds().get(0).getClass()
-                    : Class.forName("org.bukkit.craftbukkit.CraftWorld");
-            addEntityToWorld = craftWorldClass.getDeclaredMethod(
-                    "addEntityToWorld",
-                    net.minecraft.world.entity.Entity.class,
-                    CreatureSpawnEvent.SpawnReason.class);
-            addEntityToWorld.setAccessible(true);
-            plugin.getLogger().info("[HologramService] NMS bypass ready.");
+            // Resolve CraftWorld class from the actual world instance
+            World anyWorld = plugin.getServer().getWorlds().get(0);
+            Class<?> craftWorldClass = anyWorld.getClass();
+
+            // CraftWorld.getHandle() → ServerLevel (NMS world)
+            craftWorldGetHandle = craftWorldClass.getMethod("getHandle");
+
+            // CraftWorld.addEntityToWorld(net.minecraft.world.entity.Entity, SpawnReason)
+            // Find it by name since parameter type is NMS
+            for (Method m : craftWorldClass.getDeclaredMethods()) {
+                if (m.getName().equals("addEntityToWorld") && m.getParameterCount() == 2) {
+                    craftWorldAddEntity = m;
+                    craftWorldAddEntity.setAccessible(true);
+                    break;
+                }
+            }
+            if (craftWorldAddEntity == null) throw new NoSuchMethodException("addEntityToWorld not found");
+
+            // Get the NMS world to find the entity type field
+            Object nmsWorld = craftWorldGetHandle.invoke(anyWorld);
+            Class<?> nmsWorldClass = nmsWorld.getClass();
+
+            // Get EntityType class and ARMOR_STAND field via reflection
+            // The NMS entity type class name varies but is always accessible from the world
+            Class<?> entityTypeClass = Class.forName("net.minecraft.world.entity.EntityType");
+            nmsArmorStandType = entityTypeClass.getField("ARMOR_STAND").get(null);
+
+            // EntityType.create(ServerLevel) — creates a new NMS entity instance
+            // Actually use the constructor: ArmorStandClass(EntityType, Level)
+            Class<?> nmsArmorStandClass =
+                    Class.forName("net.minecraft.world.entity.decoration.ArmorStand");
+            Class<?> nmsLevelClass = Class.forName("net.minecraft.world.level.Level");
+
+            nmsLevelCreateEntity = nmsArmorStandClass.getConstructor(entityTypeClass, nmsLevelClass);
+            nmsLevelCreateEntity.setAccessible(true);
+
+            // NMSEntity.setPos(double, double, double)
+            Class<?> nmsEntityClass = Class.forName("net.minecraft.world.entity.Entity");
+            nmsEntitySetPos = nmsEntityClass.getMethod("setPos", double.class, double.class, double.class);
+            nmsEntitySetYRot = nmsEntityClass.getMethod("setYRot", float.class);
+            nmsEntityGetBukkit = nmsEntityClass.getMethod("getBukkitEntity");
+
+            reflectionReady = true;
+            plugin.getLogger().info("[HologramService] Silent spawn via reflection ready.");
         } catch (Exception e) {
-            plugin.getLogger().warning("[HologramService] NMS bypass unavailable, "
-                    + "falling back to standard spawn: " + e.getMessage());
+            plugin.getLogger().warning(
+                    "[HologramService] Silent spawn unavailable, using standard spawn: "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
     }
 
     /**
-     * Spawns an ArmorStand without firing CreatureSpawnEvent.
-     * Falls back to standard world.spawn() if reflection is unavailable.
+     * Spawns an ArmorStand WITHOUT firing CreatureSpawnEvent.
+     * Uses pure reflection to call CraftWorld.addEntityToWorld() directly.
+     * Falls back to standard world.spawn() if reflection fails.
      */
     private ArmorStand spawnSilently(Location loc) {
-        World world = loc.getWorld();
-        if (addEntityToWorld != null) {
+        if (reflectionReady) {
             try {
-                // Create NMS entity via craftbukkit internals
-                org.bukkit.craftbukkit.CraftWorld craftWorld =
-                        (org.bukkit.craftbukkit.CraftWorld) world;
-                net.minecraft.world.level.Level nmsLevel = craftWorld.getHandle();
+                Object craftWorld = loc.getWorld();
+                Object nmsWorld   = craftWorldGetHandle.invoke(craftWorld);
 
-                net.minecraft.world.entity.decoration.ArmorStand nmsStand =
-                        new net.minecraft.world.entity.decoration.ArmorStand(
-                                net.minecraft.world.entity.EntityType.ARMOR_STAND, nmsLevel);
-                nmsStand.setPos(loc.getX(), loc.getY(), loc.getZ());
-                nmsStand.setYRot(loc.getYaw());
+                // new net.minecraft.world.entity.decoration.ArmorStand(EntityType, Level)
+                Object nmsStand = nmsLevelCreateEntity.invoke(null, nmsArmorStandType, nmsWorld);
 
-                // Call addEntityToWorld directly — skips CreatureSpawnEvent
-                addEntityToWorld.invoke(craftWorld, nmsStand,
+                nmsEntitySetPos.invoke(nmsStand, loc.getX(), loc.getY(), loc.getZ());
+                nmsEntitySetYRot.invoke(nmsStand, loc.getYaw());
+
+                // addEntityToWorld(NMSEntity, SpawnReason) — bypasses CreatureSpawnEvent
+                craftWorldAddEntity.invoke(craftWorld, nmsStand,
                         CreatureSpawnEvent.SpawnReason.CUSTOM);
 
-                return (ArmorStand) nmsStand.getBukkitEntity();
+                return (ArmorStand) nmsEntityGetBukkit.invoke(nmsStand);
             } catch (Exception e) {
-                plugin.getLogger().warning("[HologramService] Silent spawn failed: "
-                        + e.getMessage());
+                plugin.getLogger().log(Level.WARNING,
+                        "[HologramService] Silent spawn failed, using fallback", e);
+                reflectionReady = false;
             }
         }
-        // Fallback
-        return world.spawn(loc, ArmorStand.class,
-                CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {});
+        // Fallback — fires CreatureSpawnEvent but doesn't crash
+        return loc.getWorld().spawn(loc, ArmorStand.class,
+                CreatureSpawnEvent.SpawnReason.CUSTOM, as -> {});
     }
 
     // -----------------------------------------------------------------------
@@ -177,7 +216,6 @@ public class HologramService {
         for (int i = 0; i < lines.size(); i++) {
             Location loc = base.clone();
             loc.setY(topY - i * LINE_SPACING);
-
             ArmorStand as = spawnSilently(loc);
             as.setVisible(false);
             as.setCustomNameVisible(true);
@@ -236,7 +274,6 @@ public class HologramService {
             for (Map.Entry<UUID, UUID> entry : new ArrayList<>(itemStandIds.entrySet())) {
                 UUID shopId  = entry.getKey();
                 UUID standId = entry.getValue();
-
                 Entity entity = plugin.getServer().getEntity(standId);
                 if (!(entity instanceof ArmorStand as)) {
                     itemStandIds.remove(shopId);
@@ -303,7 +340,6 @@ public class HologramService {
         } else {
             itemName = "&7Not configured";
         }
-
         Optional<CurrencyProvider> provOpt = plugin.getCurrencyRegistry()
                 .getProvider(shop.getCurrencyId());
         String currName = provOpt.map(CurrencyProvider::getDisplayName)
@@ -320,7 +356,6 @@ public class HologramService {
                     "&6&l\u2726 Shop \u2726", "&f{item}", "&e{price} {currency}",
                     "{mode}", "&7Stock: &f{stock}", "&7Bank: &f{bank} {currency}");
         }
-
         List<String> result = new ArrayList<>();
         for (String tpl : template) {
             result.add(tpl
