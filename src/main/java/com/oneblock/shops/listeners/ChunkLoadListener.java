@@ -11,7 +11,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 public class ChunkLoadListener implements Listener {
 
@@ -27,28 +29,28 @@ public class ChunkLoadListener implements Listener {
         this.hologramService = hologramService;
     }
 
-    /**
-     * When a chunk loads, recreate holograms for any shops inside it.
-     * worldScanRemove inside createOrUpdate prevents duplicates.
-     */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkLoad(ChunkLoadEvent event) {
         Chunk chunk = event.getChunk();
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            Collection<Shop> allShops = shopManager.getAllShops();
-            for (Shop shop : allShops) {
+            // Collect shops in this chunk that need holograms
+            List<Shop> needsHologram = new ArrayList<>();
+            for (Shop shop : shopManager.getAllShops()) {
                 if (!shop.getWorldName().equals(chunk.getWorld().getName())) continue;
-                if (isInChunk(shop, chunk)) {
-                    hologramService.createOrUpdate(shop);
-                }
+                if (!isInChunk(shop, chunk)) continue;
+                // Skip if this shop already has live holograms — don't respawn unnecessarily
+                if (hologramService.isLive(shop.getId())) continue;
+                needsHologram.add(shop);
+            }
+            // Stagger spawns by 2 ticks each to spread the CreatureSpawnEvent load
+            for (int i = 0; i < needsHologram.size(); i++) {
+                final Shop shop = needsHologram.get(i);
+                plugin.getServer().getScheduler().runTaskLater(plugin,
+                        () -> hologramService.createOrUpdate(shop), i * 2L);
             }
         }, 2L);
     }
 
-    /**
-     * When a world fully loads, run a one-time orphan scan.
-     * This is far cheaper than scanning on every chunk load.
-     */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onWorldLoad(WorldLoadEvent event) {
         plugin.getServer().getScheduler().runTaskLater(plugin,

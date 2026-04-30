@@ -41,6 +41,8 @@ public class HologramService {
 
     private final Map<UUID, UUID> itemStandIds         = new HashMap<>();
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
+    /** Shop IDs that currently have live hologram stands in the world. */
+    private final Set<UUID>       liveHolograms         = new HashSet<>();
 
     private long globalTick   = 0;
     private int  globalTaskId = -1;
@@ -157,7 +159,11 @@ public class HologramService {
                 Location base = shop.getLocation();
                 if (base == null || base.getWorld() == null) return;
                 spawnTextStands(shop, base);
-                if (shop.getItem() != null) spawnItemStand(shop, base);
+                if (shop.getItem() != null) {
+                    spawnItemStand(shop, base);
+                } else {
+                    liveHolograms.add(shop.getId());
+                }
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING,
                         "[HologramService] createOrUpdate failed for " + shop.getId(), e);
@@ -193,6 +199,11 @@ public class HologramService {
 
     public boolean isIntentionallyRemoving(UUID shopId) {
         return intentionallyRemoving.contains(shopId);
+    }
+
+    /** Returns true if this shop already has live holograms spawned. */
+    public boolean isLive(UUID shopId) {
+        return liveHolograms.contains(shopId);
     }
 
     public void shutdown() {
@@ -256,6 +267,7 @@ public class HologramService {
         pdcSet(as, key(PDC_ITEM_KEY), shop.getId().toString());
 
         itemStandIds.put(shop.getId(), as.getUniqueId());
+        liveHolograms.add(shop.getId());
         maybeStartGlobalTask();
     }
 
@@ -308,6 +320,7 @@ public class HologramService {
 
     private void worldScanRemove(UUID shopId) {
         itemStandIds.remove(shopId);
+        liveHolograms.remove(shopId);
         intentionallyRemoving.add(shopId);
         try {
             String idStr = shopId.toString();
