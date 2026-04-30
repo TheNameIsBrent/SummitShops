@@ -50,7 +50,7 @@ public class HologramService {
     /** shopId → UUID of the animated item stand */
     private final Map<UUID, UUID> itemStandIds        = new HashMap<>();
     /** Entity UUIDs currently being spawned by us — suppresses CreatureSpawnEvent */
-    static final Set<UUID> suppressedSpawns = Collections.synchronizedSet(new HashSet<>());
+    public static final Set<UUID> suppressedSpawns = Collections.synchronizedSet(new HashSet<>());
     /** Shop IDs being intentionally removed — suppresses respawn loop */
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
 
