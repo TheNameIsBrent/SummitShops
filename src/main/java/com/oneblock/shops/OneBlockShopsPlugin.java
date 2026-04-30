@@ -5,6 +5,7 @@ import com.oneblock.shops.economy.CurrencyRegistry;
 import com.oneblock.shops.hologram.HologramService;
 import com.oneblock.shops.listeners.ChunkLoadListener;
 import com.oneblock.shops.listeners.HologramProtectionListener;
+import com.oneblock.shops.listeners.SpawnSuppressListener;
 import com.oneblock.shops.listeners.IslandOwnerListener;
 import com.oneblock.shops.listeners.ShopListener;
 import com.oneblock.shops.shop.ShopManager;
@@ -72,6 +73,8 @@ public class OneBlockShopsPlugin extends JavaPlugin {
                 new ChunkLoadListener(this, shopManager, hologramService), this);
         getServer().getPluginManager().registerEvents(
                 new IslandOwnerListener(this), this);
+        getServer().getPluginManager().registerEvents(
+                new SpawnSuppressListener(), this);
         getServer().getPluginManager().registerEvents(
                 new HologramProtectionListener(this, shopManager, hologramService), this);
 

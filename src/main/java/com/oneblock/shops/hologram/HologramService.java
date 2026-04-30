@@ -10,10 +10,10 @@ import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
-import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.*;
+import java.util.Collections;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -49,6 +49,8 @@ public class HologramService {
 
     /** shopId → UUID of the animated item stand */
     private final Map<UUID, UUID> itemStandIds        = new HashMap<>();
+    /** Entity UUIDs currently being spawned by us — suppresses CreatureSpawnEvent */
+    static final Set<UUID> suppressedSpawns = Collections.synchronizedSet(new HashSet<>());
     /** Shop IDs being intentionally removed — suppresses respawn loop */
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
 
@@ -132,7 +134,8 @@ public class HologramService {
             Location loc = base.clone();
             loc.setY(topY - i * LINE_SPACING);
 
-            world.spawn(loc, ArmorStand.class, CreatureSpawnEvent.SpawnReason.CUSTOM, as -> {
+            world.spawn(loc, ArmorStand.class, as -> {
+                suppressedSpawns.add(as.getUniqueId());
                 as.setVisible(false);
                 as.setCustomNameVisible(true);
                 as.setCustomName(color(line));
@@ -161,8 +164,8 @@ public class HologramService {
         Location loc = base.clone();
         loc.setY(itemY);
 
-        ArmorStand as = world.spawn(loc, ArmorStand.class,
-                CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {
+        ArmorStand as = world.spawn(loc, ArmorStand.class, stand -> {
+            suppressedSpawns.add(stand.getUniqueId());
             stand.setVisible(false);
             stand.setCustomNameVisible(false);
             stand.setGravity(false);
