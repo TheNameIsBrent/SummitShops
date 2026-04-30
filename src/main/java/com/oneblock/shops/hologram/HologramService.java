@@ -4,55 +4,52 @@ import com.oneblock.shops.OneBlockShopsPlugin;
 import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopMode;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.format.TextDecoration;
-import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
-import org.bukkit.entity.Display;
+import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.ItemDisplay;
-import org.bukkit.entity.TextDisplay;
+import org.bukkit.entity.EntityType;
+import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.persistence.PersistentDataType;
-import org.bukkit.util.Transformation;
-import org.joml.AxisAngle4f;
-import org.joml.Vector3f;
 
 import java.util.*;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**
- * Hologram service using Display entities ONLY (TextDisplay + ItemDisplay).
+ * ArmorStand hologram service.
  *
- * WHY Display entities:
- *   - NOT LivingEntity — CreatureSpawnEvent never fires. MythicMobs, SSB2
- *     entity limits, RoseStacker — none intercept Display spawns.
- *   - No ArmorStand = nothing to steal, no manipulation events needed.
+ * KEY DESIGN: all entities use setPersistent(false).
+ * They are NEVER written to disk, eliminating the oversized chunk problem
+ * entirely. The ChunkLoadListener recreates them when chunks load.
  *
- * ARCHITECTURE:
- *   - One TextDisplay per shop: all lines as a single multi-line Component,
- *     Billboard.CENTER so it always faces the player.
- *   - One ItemDisplay per shop: bob + spin animation.
- *   - ONE global scheduler task for all ItemDisplay animations.
- *   - intentionallyRemoving prevents respawn loops.
+ * PDC tags are still written so we can find and remove them in memory,
+ * but since persistent=false the tags never reach disk.
+ *
+ * Text stands: setMarker(true) — no hitbox, no CreatureSpawnEvent issues
+ * because we use SpawnReason.CUSTOM.
+ *
+ * Item stand: setMarker(false) so the helmet renders. Equipment locks
+ * prevent item theft. Protected by HologramProtectionListener.
+ *
+ * Animation: ONE global task for all shops — no per-shop tasks.
  */
 public class HologramService {
 
     public static final String PDC_KEY      = "shop_hologram_id";
     public static final String PDC_ITEM_KEY = "shop_item_display_id";
 
-    private static final double BOB_AMPLITUDE  = 0.08;
-    private static final int    BOB_PERIOD     = 80;
-    private static final int    ANIM_INTERVAL  = 3;
-    private static final float  DEG_PER_UPDATE = 6.75f;
+    private static final double LINE_SPACING  = 0.27;
+    private static final double BOB_AMPLITUDE = 0.08;
+    private static final int    BOB_PERIOD    = 80;
+    private static final float  DEG_PER_TICK  = 2.25f; // degrees per 2-tick step
 
     private final OneBlockShopsPlugin plugin;
 
-    private final Map<UUID, UUID> itemDisplayIds       = new HashMap<>();
+    /** shopId → UUID of the animated item stand */
+    private final Map<UUID, UUID> itemStandIds        = new HashMap<>();
+    /** Shop IDs being intentionally removed — suppresses respawn loop */
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
 
     private long globalTick   = 0;
@@ -72,8 +69,8 @@ public class HologramService {
                 worldScanRemove(shop.getId());
                 Location base = shop.getLocation();
                 if (base == null || base.getWorld() == null) return;
-                spawnTextDisplay(shop, base);
-                if (shop.getItem() != null) spawnItemDisplay(shop, base);
+                spawnTextStands(shop, base);
+                if (shop.getItem() != null) spawnItemStand(shop, base);
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING,
                         "[HologramService] createOrUpdate failed for " + shop.getId(), e);
@@ -83,7 +80,7 @@ public class HologramService {
 
     public void remove(Shop shop) {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
-            itemDisplayIds.remove(shop.getId());
+            itemStandIds.remove(shop.getId());
             worldScanRemove(shop.getId());
             maybeStopGlobalTask();
         });
@@ -96,7 +93,7 @@ public class HologramService {
             NamespacedKey textKey = key(PDC_KEY);
             NamespacedKey itemKey = key(PDC_ITEM_KEY);
             for (Entity e : world.getEntities()) {
-                if (!(e instanceof TextDisplay) && !(e instanceof ItemDisplay)) continue;
+                if (!(e instanceof ArmorStand)) continue;
                 String tag = pdcGet(e, textKey);
                 if (tag == null) tag = pdcGet(e, itemKey);
                 if (tag == null) continue;
@@ -116,187 +113,121 @@ public class HologramService {
             plugin.getServer().getScheduler().cancelTask(globalTaskId);
             globalTaskId = -1;
         }
-        itemDisplayIds.clear();
+        itemStandIds.clear();
     }
 
     // -----------------------------------------------------------------------
-    // Spawning
+    // Spawning — text stands (persistent=false → never saved to disk)
     // -----------------------------------------------------------------------
 
-    private void spawnTextDisplay(Shop shop, Location base) {
-        World world = base.getWorld();
-        double textYBase = base.getY() + plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
+    private void spawnTextStands(Shop shop, Location base) {
         List<String> lines = buildLines(shop);
+        World world = base.getWorld();
+        double textYBase = base.getY()
+                + plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
+        double topY = textYBase + (lines.size() - 1) * LINE_SPACING;
 
-        // One TextDisplay per line — each stores a tiny plain Component in NBT
-        // instead of one massive nested legacy component tree.
-        // Lines are stacked 0.27 blocks apart, top line first.
         for (int i = 0; i < lines.size(); i++) {
-            final int lineIndex = i;
-            final String lineText = lines.get(i);
+            final String line = lines.get(i);
             Location loc = base.clone();
-            loc.setY(textYBase + (lines.size() - 1 - i) * 0.27);
+            loc.setY(topY - i * LINE_SPACING);
 
-            world.spawn(loc, TextDisplay.class, display -> {
-                // Parse &-codes into a Component without the heavy legacy serializer
-                display.text(parseColors(lineText));
-                display.setAlignment(TextDisplay.TextAlignment.CENTER);
-                display.setBillboard(Display.Billboard.CENTER);
-                display.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
-                display.setDefaultBackground(false);
-                display.setSeeThrough(false);
-                display.setGravity(false);
-                display.setInvulnerable(true);
-                display.setPersistent(true);
-                display.setLineWidth(200);
-                pdcSet(display, key(PDC_KEY), shop.getId().toString());
+            world.spawn(loc, ArmorStand.class, CreatureSpawnEvent.SpawnReason.CUSTOM, as -> {
+                as.setVisible(false);
+                as.setCustomNameVisible(true);
+                as.setCustomName(color(line));
+                as.setGravity(false);
+                as.setInvulnerable(true);
+                as.setPersistent(false);   // ← never written to disk
+                as.setMarker(true);
+                as.setSmall(true);
+                as.setCollidable(false);
+                as.setCanPickupItems(false);
+                pdcSet(as, key(PDC_KEY), shop.getId().toString());
             });
         }
     }
 
-    /**
-     * Converts a simple &-color-coded string to an Adventure Component
-     * WITHOUT using LegacyComponentSerializer (which causes a deep
-     * recursive NBT decode on every SynchedEntityData equality check).
-     *
-     * Only handles &0-9, &a-f, &l, &o, &n, &m, &r — sufficient for hologram lines.
-     * The resulting component is a flat list of styled text nodes, which
-     * serializes to tiny NBT compared to the legacy serializer's nested tree.
-     */
-    private static Component parseColors(String text) {
-        net.kyori.adventure.text.TextComponent.Builder builder =
-                Component.text();
-        StringBuilder current = new StringBuilder();
-        net.kyori.adventure.text.format.Style.Builder style =
-                net.kyori.adventure.text.format.Style.style();
+    // -----------------------------------------------------------------------
+    // Spawning — item stand (persistent=false → never saved to disk)
+    // -----------------------------------------------------------------------
 
-        int i = 0;
-        while (i < text.length()) {
-            char ch = text.charAt(i);
-            if ((ch == '&' || ch == '§') && i + 1 < text.length()) {
-                // Flush current text with current style
-                if (current.length() > 0) {
-                    builder.append(Component.text(current.toString(), style.build()));
-                    current.setLength(0);
-                }
-                char code = Character.toLowerCase(text.charAt(i + 1));
-                style = applyCode(style, code);
-                i += 2;
-            } else {
-                current.append(ch);
-                i++;
-            }
-        }
-        if (current.length() > 0) {
-            builder.append(Component.text(current.toString(), style.build()));
-        }
-        return builder.build();
-    }
-
-    private static net.kyori.adventure.text.format.Style.Builder applyCode(
-            net.kyori.adventure.text.format.Style.Builder style, char code) {
-        switch (code) {
-            case '0' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.BLACK); }
-            case '1' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_BLUE); }
-            case '2' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_GREEN); }
-            case '3' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_AQUA); }
-            case '4' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_RED); }
-            case '5' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_PURPLE); }
-            case '6' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GOLD); }
-            case '7' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GRAY); }
-            case '8' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_GRAY); }
-            case '9' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.BLUE); }
-            case 'a' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GREEN); }
-            case 'b' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.AQUA); }
-            case 'c' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.RED); }
-            case 'd' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.LIGHT_PURPLE); }
-            case 'e' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.YELLOW); }
-            case 'f' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.WHITE); }
-            case 'l' -> { return style.decoration(TextDecoration.BOLD, true); }
-            case 'o' -> { return style.decoration(TextDecoration.ITALIC, true); }
-            case 'n' -> { return style.decoration(TextDecoration.UNDERLINED, true); }
-            case 'm' -> { return style.decoration(TextDecoration.STRIKETHROUGH, true); }
-            case 'r' -> { return net.kyori.adventure.text.format.Style.style(); }
-            default  -> { return style; }
-        }
-    }
-
-    private void spawnItemDisplay(Shop shop, Location base) {
+    private void spawnItemStand(Shop shop, Location base) {
         World world = base.getWorld();
         if (world == null) return;
 
-        double itemY = base.getY() + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
+        double itemY = base.getY()
+                + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
         Location loc = base.clone();
         loc.setY(itemY);
 
-        ItemDisplay id = world.spawn(loc, ItemDisplay.class, display -> {
-            display.setItemStack(shop.getItem().clone());
-            display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.GROUND);
-            display.setBillboard(Display.Billboard.FIXED);
-            display.setGravity(false);
-            display.setInvulnerable(true);
-            display.setPersistent(true);
-            display.setInterpolationDuration(ANIM_INTERVAL);
-            display.setInterpolationDelay(0);
-            display.setTransformation(new Transformation(
-                    new Vector3f(0, 0, 0),
-                    new AxisAngle4f(0, 0, 1, 0),
-                    new Vector3f(0.65f, 0.65f, 0.65f),
-                    new AxisAngle4f(0, 0, 1, 0)));
-            pdcSet(display, key(PDC_ITEM_KEY), shop.getId().toString());
+        ArmorStand as = world.spawn(loc, ArmorStand.class,
+                CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {
+            stand.setVisible(false);
+            stand.setCustomNameVisible(false);
+            stand.setGravity(false);
+            stand.setInvulnerable(true);
+            stand.setPersistent(false);    // ← never written to disk
+            stand.setMarker(false);        // must be false for helmet to render
+            stand.setSmall(true);
+            stand.setCollidable(false);
+            stand.setCanPickupItems(false);
+            // Lock all slots so the item cannot be taken
+            for (org.bukkit.inventory.EquipmentSlot slot
+                    : org.bukkit.inventory.EquipmentSlot.values()) {
+                stand.addEquipmentLock(slot, ArmorStand.LockType.ADDING_OR_CHANGING);
+                stand.addEquipmentLock(slot, ArmorStand.LockType.REMOVING_OR_CHANGING);
+            }
+            stand.getEquipment().setHelmet(shop.getItem().clone());
+            pdcSet(stand, key(PDC_ITEM_KEY), shop.getId().toString());
         });
 
-        itemDisplayIds.put(shop.getId(), id.getUniqueId());
+        itemStandIds.put(shop.getId(), as.getUniqueId());
         maybeStartGlobalTask();
     }
 
     // -----------------------------------------------------------------------
-    // Global animation task
+    // Global animation task — ONE task for ALL shops
     // -----------------------------------------------------------------------
 
     private void maybeStartGlobalTask() {
         if (globalTaskId != -1) return;
         globalTaskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
             globalTick++;
-            double bobY = BOB_AMPLITUDE * Math.sin(2 * Math.PI * globalTick / (double) BOB_PERIOD);
-            float  rad  = (float) Math.toRadians((globalTick * DEG_PER_UPDATE) % 360f);
+            double bobY = BOB_AMPLITUDE
+                    * Math.sin(2 * Math.PI * globalTick / (double) BOB_PERIOD);
+            float yaw = (globalTick * DEG_PER_TICK) % 360f;
 
-            for (Map.Entry<UUID, UUID> entry : new ArrayList<>(itemDisplayIds.entrySet())) {
-                UUID shopId   = entry.getKey();
-                UUID entityId = entry.getValue();
+            for (Map.Entry<UUID, UUID> entry : new ArrayList<>(itemStandIds.entrySet())) {
+                UUID shopId  = entry.getKey();
+                UUID standId = entry.getValue();
 
-                Entity entity = plugin.getServer().getEntity(entityId);
-                if (!(entity instanceof ItemDisplay display)) {
-                    itemDisplayIds.remove(shopId);
+                Entity entity = plugin.getServer().getEntity(standId);
+                if (!(entity instanceof ArmorStand as)) {
+                    itemStandIds.remove(shopId);
                     continue;
                 }
 
                 Shop shop = plugin.getShopManager().getById(shopId).orElse(null);
-                if (shop == null) { itemDisplayIds.remove(shopId); continue; }
+                if (shop == null) { itemStandIds.remove(shopId); continue; }
 
                 double baseY = shop.getLocation() != null
                         ? shop.getLocation().getY()
                           + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35)
-                        : display.getLocation().getY();
+                        : as.getLocation().getY();
 
-                Location newLoc = display.getLocation();
+                Location newLoc = as.getLocation();
                 newLoc.setY(baseY + bobY);
-                display.teleport(newLoc);
-
-                display.setInterpolationDelay(0);
-                display.setTransformation(new Transformation(
-                        new Vector3f(0, 0, 0),
-                        new AxisAngle4f(0, 0, 1, 0),
-                        new Vector3f(0.65f, 0.65f, 0.65f),
-                        new AxisAngle4f(rad, 0, 1, 0)));
+                newLoc.setYaw(yaw);
+                as.teleport(newLoc);
             }
 
-            if (itemDisplayIds.isEmpty()) maybeStopGlobalTask();
-        }, 2L, ANIM_INTERVAL).getTaskId();
+            if (itemStandIds.isEmpty()) maybeStopGlobalTask();
+        }, 2L, 2L).getTaskId();
     }
 
     private void maybeStopGlobalTask() {
-        if (!itemDisplayIds.isEmpty() || globalTaskId == -1) return;
+        if (!itemStandIds.isEmpty() || globalTaskId == -1) return;
         plugin.getServer().getScheduler().cancelTask(globalTaskId);
         globalTaskId = -1;
     }
@@ -306,7 +237,7 @@ public class HologramService {
     // -----------------------------------------------------------------------
 
     private void worldScanRemove(UUID shopId) {
-        itemDisplayIds.remove(shopId);
+        itemStandIds.remove(shopId);
         intentionallyRemoving.add(shopId);
         try {
             String idStr = shopId.toString();
@@ -314,7 +245,7 @@ public class HologramService {
             NamespacedKey itemKey = key(PDC_ITEM_KEY);
             for (World world : plugin.getServer().getWorlds()) {
                 for (Entity e : world.getEntities()) {
-                    if (!(e instanceof TextDisplay) && !(e instanceof ItemDisplay)) continue;
+                    if (!(e instanceof ArmorStand)) continue;
                     String tag = pdcGet(e, textKey);
                     if (tag == null) tag = pdcGet(e, itemKey);
                     if (idStr.equals(tag)) e.remove();
@@ -397,6 +328,8 @@ public class HologramService {
         String lower = enumName.replace("_", " ").toLowerCase(Locale.ROOT);
         return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
     }
+
+    private static String color(String s) { return s.replace("&", "\u00A7"); }
 
     private static String fmt(double v) {
         return v == (long) v ? String.valueOf((long) v) : String.format("%.2f", v);
