@@ -13,7 +13,6 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.*;
-import java.util.Collections;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -49,8 +48,6 @@ public class HologramService {
 
     /** shopId → UUID of the animated item stand */
     private final Map<UUID, UUID> itemStandIds        = new HashMap<>();
-    /** Entity UUIDs currently being spawned by us — suppresses CreatureSpawnEvent */
-    public static final Set<UUID> suppressedSpawns = Collections.synchronizedSet(new HashSet<>());
     /** Shop IDs being intentionally removed — suppresses respawn loop */
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
 
@@ -135,7 +132,8 @@ public class HologramService {
             loc.setY(topY - i * LINE_SPACING);
 
             world.spawn(loc, ArmorStand.class, as -> {
-                suppressedSpawns.add(as.getUniqueId());
+                // Tag as NPC so MythicMobs skips this entity in its spawn listener
+                as.setMetadata("NPC", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
                 as.setVisible(false);
                 as.setCustomNameVisible(true);
                 as.setCustomName(color(line));
@@ -165,7 +163,8 @@ public class HologramService {
         loc.setY(itemY);
 
         ArmorStand as = world.spawn(loc, ArmorStand.class, stand -> {
-            suppressedSpawns.add(stand.getUniqueId());
+            // Tag as NPC so MythicMobs skips this entity in its spawn listener
+            stand.setMetadata("NPC", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
             stand.setVisible(false);
             stand.setCustomNameVisible(false);
             stand.setGravity(false);
