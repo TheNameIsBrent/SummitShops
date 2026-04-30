@@ -81,6 +81,9 @@ public class HologramProtectionListener implements Listener {
             return;
         }
 
+        // Don't reschedule if WE are the ones removing this stand (would cause an infinite loop)
+        if (hologramService.isIntentionallyRemoving(shopId)) return;
+
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
             Optional<Shop> shopOpt = shopManager.getById(shopId);
             if (shopOpt.isPresent()) {

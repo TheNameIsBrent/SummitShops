@@ -12,6 +12,7 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 
 import java.util.*;
+import java.util.HashSet;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -43,6 +44,12 @@ public class HologramService {
 
     /** shopId → UUID of the animated item ArmorStand (for the global task to look up) */
     private final Map<UUID, UUID> itemStandIds = new HashMap<>();
+
+    /**
+     * Shop IDs whose stands are currently being intentionally removed by us.
+     * HologramProtectionListener checks this to avoid triggering a respawn loop.
+     */
+    private final Set<UUID> intentionallyRemoving = new HashSet<>();
 
     /** Tick counter shared by the global animation task */
     private long globalTick = 0;
@@ -102,6 +109,11 @@ public class HologramService {
                 } catch (IllegalArgumentException ignored) { e.remove(); }
             }
         });
+    }
+
+    /** Returns true if this shop's stands are being intentionally removed by us. */
+    public boolean isIntentionallyRemoving(UUID shopId) {
+        return intentionallyRemoving.contains(shopId);
     }
 
     public void shutdown() {
@@ -236,17 +248,24 @@ public class HologramService {
 
     private void worldScanRemove(UUID shopId) {
         itemStandIds.remove(shopId);
-        String idStr = shopId.toString();
-        org.bukkit.NamespacedKey textKey = key(PDC_KEY);
-        org.bukkit.NamespacedKey itemKey = key(PDC_ITEM_KEY);
+        // Flag this shop as intentionally being removed so the protection
+        // listener does not schedule a respawn when it sees our e.remove() calls.
+        intentionallyRemoving.add(shopId);
+        try {
+            String idStr = shopId.toString();
+            org.bukkit.NamespacedKey textKey = key(PDC_KEY);
+            org.bukkit.NamespacedKey itemKey = key(PDC_ITEM_KEY);
 
-        for (World world : plugin.getServer().getWorlds()) {
-            for (Entity e : world.getEntities()) {
-                if (!(e instanceof ArmorStand)) continue;
-                String tag = pdc(e, textKey);
-                if (tag == null) tag = pdc(e, itemKey);
-                if (idStr.equals(tag)) e.remove();
+            for (World world : plugin.getServer().getWorlds()) {
+                for (Entity e : world.getEntities()) {
+                    if (!(e instanceof ArmorStand)) continue;
+                    String tag = pdc(e, textKey);
+                    if (tag == null) tag = pdc(e, itemKey);
+                    if (idStr.equals(tag)) e.remove();
+                }
             }
+        } finally {
+            intentionallyRemoving.remove(shopId);
         }
     }
 
