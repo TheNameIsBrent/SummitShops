@@ -9,6 +9,7 @@ import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.event.entity.CreatureSpawnEvent;
 
 import java.util.*;
 import java.util.logging.Level;
@@ -125,7 +126,8 @@ public class HologramService {
             Location loc = base.clone();
             loc.setY(topY - i * LINE_SPACING);
 
-            ArmorStand as = (ArmorStand) world.spawnEntity(loc, EntityType.ARMOR_STAND);
+            ArmorStand as = world.spawn(loc, ArmorStand.class,
+                    CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {});
             as.setVisible(false);
             as.setCustomNameVisible(true);
             as.setCustomName(color(lines.get(i)));
@@ -148,7 +150,8 @@ public class HologramService {
         Location loc = base.clone();
         loc.setY(itemY);
 
-        ArmorStand as = (ArmorStand) world.spawnEntity(loc, EntityType.ARMOR_STAND);
+        ArmorStand as = world.spawn(loc, ArmorStand.class,
+                CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {});
         as.setVisible(false);
         as.setCustomNameVisible(false);
         as.setGravity(false);
