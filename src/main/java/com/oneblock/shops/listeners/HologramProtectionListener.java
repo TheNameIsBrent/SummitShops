@@ -5,25 +5,26 @@ import com.oneblock.shops.hologram.HologramService;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopManager;
 import org.bukkit.NamespacedKey;
-import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.Player;
+import org.bukkit.entity.ItemDisplay;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityRemoveEvent;
-import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Protects shop hologram ArmorStands from:
- *   1. Players taking / swapping the helmet item
- *   2. Players punching the stand
- *   3. Any removal (entity clear, /killall, etc.) → respawns the hologram
+ * Watches for hologram Display entities being removed externally
+ * (entity-clear plugins, /killall, etc.) and respawns them.
+ *
+ * Display entities (TextDisplay, ItemDisplay) cannot have items stolen
+ * and have no hitbox, so no player-interaction protection is needed.
+ * The intentionallyRemoving guard in HologramService prevents respawn
+ * loops when we remove entities ourselves.
  */
 public class HologramProtectionListener implements Listener {
 
@@ -44,32 +45,10 @@ public class HologramProtectionListener implements Listener {
         this.itemKey         = new NamespacedKey(plugin, HologramService.PDC_ITEM_KEY);
     }
 
-    /** Block players from taking the helmet off the item stand. */
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
-        if (isShopStand(event.getRightClicked())) {
-            event.setCancelled(true);
-        }
-    }
-
-    /** Block players from punching the item stand. */
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onEntityDamage(EntityDamageByEntityEvent event) {
-        if (!(event.getEntity() instanceof ArmorStand as)) return;
-        if (!(event.getDamager() instanceof Player)) return;
-        if (isShopStand(as)) {
-            event.setCancelled(true);
-        }
-    }
-
-    /**
-     * If a hologram stand is removed for any reason and its shop still exists,
-     * schedule a full hologram respawn.
-     */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onEntityRemove(EntityRemoveEvent event) {
         Entity entity = event.getEntity();
-        if (!(entity instanceof ArmorStand)) return;
+        if (!(entity instanceof TextDisplay) && !(entity instanceof ItemDisplay)) return;
 
         String shopIdStr = getShopTag(entity);
         if (shopIdStr == null) return;
@@ -81,7 +60,7 @@ public class HologramProtectionListener implements Listener {
             return;
         }
 
-        // Don't reschedule if WE are the ones removing this stand (would cause an infinite loop)
+        // Don't respawn if WE removed it (would cause an infinite loop)
         if (hologramService.isIntentionallyRemoving(shopId)) return;
 
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
@@ -90,13 +69,6 @@ public class HologramProtectionListener implements Listener {
                 hologramService.createOrUpdate(shopOpt.get());
             }
         }, 5L);
-    }
-
-    // -----------------------------------------------------------------------
-
-    private boolean isShopStand(ArmorStand as) {
-        return as.getPersistentDataContainer().has(textKey, PersistentDataType.STRING)
-            || as.getPersistentDataContainer().has(itemKey, PersistentDataType.STRING);
     }
 
     private String getShopTag(Entity entity) {
