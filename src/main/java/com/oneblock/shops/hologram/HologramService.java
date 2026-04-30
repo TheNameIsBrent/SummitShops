@@ -322,7 +322,8 @@ public class HologramService {
             globalTick++;
             double bobY = BOB_AMPLITUDE
                     * Math.sin(2 * Math.PI * globalTick / (double) BOB_PERIOD);
-            float yaw = (globalTick * DEG_PER_TICK) % 360f;
+            // 1.125° per tick at 1-tick interval = smooth rotation, ~5s per revolution
+            float yaw = (globalTick * 1.125f) % 360f;
 
             NamespacedKey itemKey = key(PDC_ITEM_KEY);
 
@@ -350,13 +351,10 @@ public class HologramService {
                     // Use setRotation for yaw — no event, no teleport overhead
                     as.setRotation(yaw, 0f);
 
-                    // Bob via teleport only on Y — minimal cost
+                    // Bob — update Y every tick for smooth motion
                     Location cur = as.getLocation();
-                    double targetY = baseY + bobY;
-                    if (Math.abs(cur.getY() - targetY) > 0.001) {
-                        cur.setY(targetY);
-                        as.teleport(cur);
-                    }
+                    cur.setY(baseY + bobY);
+                    as.teleport(cur);
 
                     // Keep itemStandIds up to date
                     itemStandIds.put(shopId, as.getUniqueId());
@@ -365,7 +363,7 @@ public class HologramService {
             }
 
             if (!foundAny) maybeStopGlobalTask();
-        }, 2L, 2L).getTaskId();
+        }, 1L, 1L).getTaskId();
     }
 
     private void maybeStopGlobalTask() {
