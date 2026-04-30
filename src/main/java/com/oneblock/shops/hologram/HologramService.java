@@ -47,6 +47,10 @@ public class HologramService {
     private long globalTick   = 0;
     private int  globalTaskId = -1;
 
+    // Cached keys — created once, reused every tick
+    private NamespacedKey cachedItemKey = null;
+    private NamespacedKey cachedTextKey = null;
+
     // Reflection handles — resolved once at startup
     private Method craftWorldAddEntity   = null; // CraftWorld.addEntityToWorld(NMSEntity, SpawnReason)
     private Method craftWorldGetHandle   = null; // CraftWorld.getHandle() → ServerLevel
@@ -183,8 +187,8 @@ public class HologramService {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             Set<UUID> known = plugin.getShopManager().getAllShops()
                     .stream().map(Shop::getId).collect(Collectors.toSet());
-            NamespacedKey textKey = key(PDC_KEY);
-            NamespacedKey itemKey = key(PDC_ITEM_KEY);
+            NamespacedKey textKey = textKey();
+            NamespacedKey itemKey = itemKey();
             for (Entity e : world.getEntities()) {
                 if (!(e instanceof ArmorStand)) continue;
                 String tag = pdcGet(e, textKey);
@@ -325,7 +329,7 @@ public class HologramService {
             // 1.125° per tick at 1-tick interval = smooth rotation, ~5s per revolution
             float yaw = (globalTick * 1.125f) % 360f;
 
-            NamespacedKey itemKey = key(PDC_ITEM_KEY);
+            NamespacedKey itemKey = itemKey();
 
             // Scan all loaded worlds for our item stands by PDC tag.
             // This is robust — no stale UUID cache, survives reloads and
@@ -343,9 +347,9 @@ public class HologramService {
                     Shop shop = plugin.getShopManager().getById(shopId).orElse(null);
                     if (shop == null) continue;
 
+                    double itemOffset = plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
                     double baseY = shop.getLocation() != null
-                            ? shop.getLocation().getY()
-                              + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35)
+                            ? shop.getLocation().getY() + itemOffset
                             : as.getLocation().getY();
 
                     // Use setRotation for yaw — no event, no teleport overhead
@@ -382,8 +386,8 @@ public class HologramService {
         intentionallyRemoving.add(shopId);
         try {
             String idStr = shopId.toString();
-            NamespacedKey textKey = key(PDC_KEY);
-            NamespacedKey itemKey = key(PDC_ITEM_KEY);
+            NamespacedKey textKey = textKey();
+            NamespacedKey itemKey = itemKey();
             for (World world : plugin.getServer().getWorlds()) {
                 for (Entity e : world.getEntities()) {
                     if (!(e instanceof ArmorStand)) continue;
@@ -453,6 +457,16 @@ public class HologramService {
     }
 
     private NamespacedKey key(String k) { return new NamespacedKey(plugin, k); }
+
+    private NamespacedKey itemKey() {
+        if (cachedItemKey == null) cachedItemKey = key(PDC_ITEM_KEY);
+        return cachedItemKey;
+    }
+
+    private NamespacedKey textKey() {
+        if (cachedTextKey == null) cachedTextKey = key(PDC_KEY);
+        return cachedTextKey;
+    }
 
     private static String pdcGet(Entity e, NamespacedKey key) {
         if (!e.getPersistentDataContainer().has(key, PersistentDataType.STRING)) return null;
