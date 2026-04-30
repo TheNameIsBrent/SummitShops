@@ -201,6 +201,12 @@ public class HologramService {
         return intentionallyRemoving.contains(shopId);
     }
 
+    /** Starts the global animation task unconditionally. Called on plugin enable. */
+    public void startGlobalTask() {
+        plugin.getServer().getScheduler().runTaskLater(plugin,
+                this::maybeStartGlobalTask, 40L);
+    }
+
     /** Returns true if this shop already has live holograms spawned. */
     public boolean isLive(UUID shopId) {
         return liveHolograms.contains(shopId);
@@ -318,28 +324,47 @@ public class HologramService {
                     * Math.sin(2 * Math.PI * globalTick / (double) BOB_PERIOD);
             float yaw = (globalTick * DEG_PER_TICK) % 360f;
 
-            for (Map.Entry<UUID, UUID> entry : new ArrayList<>(itemStandIds.entrySet())) {
-                UUID shopId  = entry.getKey();
-                UUID standId = entry.getValue();
-                Entity entity = plugin.getServer().getEntity(standId);
-                if (!(entity instanceof ArmorStand as)) {
-                    itemStandIds.remove(shopId);
-                    continue;
+            NamespacedKey itemKey = key(PDC_ITEM_KEY);
+
+            // Scan all loaded worlds for our item stands by PDC tag.
+            // This is robust — no stale UUID cache, survives reloads and
+            // any external removal/respawn of stands.
+            boolean foundAny = false;
+            for (org.bukkit.World world : plugin.getServer().getWorlds()) {
+                for (Entity entity : world.getEntities()) {
+                    if (!(entity instanceof ArmorStand as)) continue;
+                    String tag = pdcGet(as, itemKey);
+                    if (tag == null) continue;
+                    UUID shopId;
+                    try { shopId = UUID.fromString(tag); }
+                    catch (IllegalArgumentException e) { continue; }
+
+                    Shop shop = plugin.getShopManager().getById(shopId).orElse(null);
+                    if (shop == null) continue;
+
+                    double baseY = shop.getLocation() != null
+                            ? shop.getLocation().getY()
+                              + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35)
+                            : as.getLocation().getY();
+
+                    // Use setRotation for yaw — no event, no teleport overhead
+                    as.setRotation(yaw, 0f);
+
+                    // Bob via teleport only on Y — minimal cost
+                    Location cur = as.getLocation();
+                    double targetY = baseY + bobY;
+                    if (Math.abs(cur.getY() - targetY) > 0.001) {
+                        cur.setY(targetY);
+                        as.teleport(cur);
+                    }
+
+                    // Keep itemStandIds up to date
+                    itemStandIds.put(shopId, as.getUniqueId());
+                    foundAny = true;
                 }
-                Shop shop = plugin.getShopManager().getById(shopId).orElse(null);
-                if (shop == null) { itemStandIds.remove(shopId); continue; }
-
-                double baseY = shop.getLocation() != null
-                        ? shop.getLocation().getY()
-                          + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35)
-                        : as.getLocation().getY();
-
-                Location newLoc = as.getLocation();
-                newLoc.setY(baseY + bobY);
-                newLoc.setYaw(yaw);
-                as.teleport(newLoc);
             }
-            if (itemStandIds.isEmpty()) maybeStopGlobalTask();
+
+            if (!foundAny) maybeStopGlobalTask();
         }, 2L, 2L).getTaskId();
     }
 
