@@ -4,7 +4,10 @@ import com.oneblock.shops.OneBlockShopsPlugin;
 import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopMode;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
@@ -122,24 +125,100 @@ public class HologramService {
 
     private void spawnTextDisplay(Shop shop, Location base) {
         World world = base.getWorld();
-        double textY = base.getY() + plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
-        Location loc = base.clone();
-        loc.setY(textY);
+        double textYBase = base.getY() + plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
+        List<String> lines = buildLines(shop);
 
-        String raw = String.join("\n", buildLines(shop));
+        // One TextDisplay per line — each stores a tiny plain Component in NBT
+        // instead of one massive nested legacy component tree.
+        // Lines are stacked 0.27 blocks apart, top line first.
+        for (int i = 0; i < lines.size(); i++) {
+            final int lineIndex = i;
+            final String lineText = lines.get(i);
+            Location loc = base.clone();
+            loc.setY(textYBase + (lines.size() - 1 - i) * 0.27);
 
-        world.spawn(loc, TextDisplay.class, display -> {
-            display.text(LegacyComponentSerializer.legacyAmpersand().deserialize(raw));
-            display.setAlignment(TextDisplay.TextAlignment.CENTER);
-            display.setBillboard(Display.Billboard.CENTER);
-            display.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
-            display.setDefaultBackground(false);
-            display.setSeeThrough(false);
-            display.setGravity(false);
-            display.setInvulnerable(true);
-            display.setPersistent(true);
-            pdcSet(display, key(PDC_KEY), shop.getId().toString());
-        });
+            world.spawn(loc, TextDisplay.class, display -> {
+                // Parse &-codes into a Component without the heavy legacy serializer
+                display.text(parseColors(lineText));
+                display.setAlignment(TextDisplay.TextAlignment.CENTER);
+                display.setBillboard(Display.Billboard.CENTER);
+                display.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
+                display.setDefaultBackground(false);
+                display.setSeeThrough(false);
+                display.setGravity(false);
+                display.setInvulnerable(true);
+                display.setPersistent(true);
+                display.setLineWidth(200);
+                pdcSet(display, key(PDC_KEY), shop.getId().toString());
+            });
+        }
+    }
+
+    /**
+     * Converts a simple &-color-coded string to an Adventure Component
+     * WITHOUT using LegacyComponentSerializer (which causes a deep
+     * recursive NBT decode on every SynchedEntityData equality check).
+     *
+     * Only handles &0-9, &a-f, &l, &o, &n, &m, &r — sufficient for hologram lines.
+     * The resulting component is a flat list of styled text nodes, which
+     * serializes to tiny NBT compared to the legacy serializer's nested tree.
+     */
+    private static Component parseColors(String text) {
+        net.kyori.adventure.text.TextComponent.Builder builder =
+                Component.text();
+        StringBuilder current = new StringBuilder();
+        net.kyori.adventure.text.format.Style.Builder style =
+                net.kyori.adventure.text.format.Style.style();
+
+        int i = 0;
+        while (i < text.length()) {
+            char ch = text.charAt(i);
+            if ((ch == '&' || ch == '§') && i + 1 < text.length()) {
+                // Flush current text with current style
+                if (current.length() > 0) {
+                    builder.append(Component.text(current.toString(), style.build()));
+                    current.setLength(0);
+                }
+                char code = Character.toLowerCase(text.charAt(i + 1));
+                style = applyCode(style, code);
+                i += 2;
+            } else {
+                current.append(ch);
+                i++;
+            }
+        }
+        if (current.length() > 0) {
+            builder.append(Component.text(current.toString(), style.build()));
+        }
+        return builder.build();
+    }
+
+    private static net.kyori.adventure.text.format.Style.Builder applyCode(
+            net.kyori.adventure.text.format.Style.Builder style, char code) {
+        switch (code) {
+            case '0' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.BLACK); }
+            case '1' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_BLUE); }
+            case '2' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_GREEN); }
+            case '3' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_AQUA); }
+            case '4' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_RED); }
+            case '5' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_PURPLE); }
+            case '6' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GOLD); }
+            case '7' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GRAY); }
+            case '8' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.DARK_GRAY); }
+            case '9' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.BLUE); }
+            case 'a' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.GREEN); }
+            case 'b' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.AQUA); }
+            case 'c' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.RED); }
+            case 'd' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.LIGHT_PURPLE); }
+            case 'e' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.YELLOW); }
+            case 'f' -> { return net.kyori.adventure.text.format.Style.style().color(NamedTextColor.WHITE); }
+            case 'l' -> { return style.decoration(TextDecoration.BOLD, true); }
+            case 'o' -> { return style.decoration(TextDecoration.ITALIC, true); }
+            case 'n' -> { return style.decoration(TextDecoration.UNDERLINED, true); }
+            case 'm' -> { return style.decoration(TextDecoration.STRIKETHROUGH, true); }
+            case 'r' -> { return net.kyori.adventure.text.format.Style.style(); }
+            default  -> { return style; }
+        }
     }
 
     private void spawnItemDisplay(Shop shop, Location base) {
