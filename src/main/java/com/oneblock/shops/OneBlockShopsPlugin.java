@@ -75,6 +75,10 @@ public class OneBlockShopsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new HologramProtectionListener(this, shopManager, hologramService), this);
 
+        // Rebuild in-memory tracking from any existing hologram stands in the world
+        // so the animation task starts correctly after a reload
+        hologramService.rebuildTracking();
+
         ShopCommand shopCommand = new ShopCommand(this, shopManager, shopService);
         getCommand("shop").setExecutor(shopCommand);
         getCommand("shop").setTabCompleter(shopCommand);

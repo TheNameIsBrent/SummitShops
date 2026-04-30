@@ -206,6 +206,41 @@ public class HologramService {
         return liveHolograms.contains(shopId);
     }
 
+    /**
+     * Scans all loaded worlds for existing hologram stands and rebuilds
+     * the in-memory tracking maps. Called on plugin enable so the animation
+     * task picks up stands that survived from before a reload.
+     */
+    public void rebuildTracking() {
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            NamespacedKey itemKey = key(PDC_ITEM_KEY);
+            NamespacedKey textKey = key(PDC_KEY);
+            for (org.bukkit.World world : plugin.getServer().getWorlds()) {
+                for (Entity e : world.getEntities()) {
+                    if (!(e instanceof org.bukkit.entity.ArmorStand)) continue;
+                    String itemTag = pdcGet(e, itemKey);
+                    if (itemTag != null) {
+                        try {
+                            UUID shopId = UUID.fromString(itemTag);
+                            itemStandIds.put(shopId, e.getUniqueId());
+                            liveHolograms.add(shopId);
+                        } catch (IllegalArgumentException ignored) {}
+                    }
+                    String textTag = pdcGet(e, textKey);
+                    if (textTag != null) {
+                        try {
+                            liveHolograms.add(UUID.fromString(textTag));
+                        } catch (IllegalArgumentException ignored) {}
+                    }
+                }
+            }
+            if (!itemStandIds.isEmpty()) maybeStartGlobalTask();
+            plugin.getLogger().info("[HologramService] Rebuilt tracking: "
+                    + itemStandIds.size() + " item stand(s), "
+                    + liveHolograms.size() + " live hologram(s).");
+        });
+    }
+
     public void shutdown() {
         if (globalTaskId != -1) {
             plugin.getServer().getScheduler().cancelTask(globalTaskId);
