@@ -4,14 +4,17 @@ import com.oneblock.shops.OneBlockShopsPlugin;
 import com.oneblock.shops.economy.CurrencyProvider;
 import com.oneblock.shops.shop.Shop;
 import com.oneblock.shops.shop.ShopMode;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.persistence.PersistentDataType;
 
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
@@ -19,20 +22,12 @@ import java.util.stream.Collectors;
 /**
  * ArmorStand hologram service.
  *
- * KEY DESIGN: all entities use setPersistent(false).
- * They are NEVER written to disk, eliminating the oversized chunk problem
- * entirely. The ChunkLoadListener recreates them when chunks load.
+ * Uses reflection to call CraftWorld.addEntityToWorld() directly,
+ * bypassing the Bukkit spawn path and CreatureSpawnEvent entirely.
+ * This means MythicMobs and other plugins never see these spawns.
  *
- * PDC tags are still written so we can find and remove them in memory,
- * but since persistent=false the tags never reach disk.
- *
- * Text stands: setMarker(true) — no hitbox, no CreatureSpawnEvent issues
- * because we use SpawnReason.CUSTOM.
- *
- * Item stand: setMarker(false) so the helmet renders. Equipment locks
- * prevent item theft. Protected by HologramProtectionListener.
- *
- * Animation: ONE global task for all shops — no per-shop tasks.
+ * All entities: persistent=false so they are never saved to disk.
+ * Single global animation task for all item stands.
  */
 public class HologramService {
 
@@ -42,20 +37,74 @@ public class HologramService {
     private static final double LINE_SPACING  = 0.27;
     private static final double BOB_AMPLITUDE = 0.08;
     private static final int    BOB_PERIOD    = 80;
-    private static final float  DEG_PER_TICK  = 2.25f; // degrees per 2-tick step
+    private static final float  DEG_PER_TICK  = 2.25f;
 
     private final OneBlockShopsPlugin plugin;
 
-    /** shopId → UUID of the animated item stand */
-    private final Map<UUID, UUID> itemStandIds        = new HashMap<>();
-    /** Shop IDs being intentionally removed — suppresses respawn loop */
+    private final Map<UUID, UUID> itemStandIds         = new HashMap<>();
     private final Set<UUID>       intentionallyRemoving = new HashSet<>();
 
     private long globalTick   = 0;
     private int  globalTaskId = -1;
 
+    // Reflection handle for CraftWorld.addEntityToWorld(Entity, SpawnReason)
+    private Method addEntityToWorld = null;
+
     public HologramService(OneBlockShopsPlugin plugin) {
         this.plugin = plugin;
+        initReflection();
+    }
+
+    private void initReflection() {
+        try {
+            // CraftWorld.addEntityToWorld is package-private — get it via reflection
+            Class<?> craftWorldClass = Bukkit.getWorld("world") != null
+                    ? Bukkit.getServer().getWorlds().get(0).getClass()
+                    : Class.forName("org.bukkit.craftbukkit.CraftWorld");
+            addEntityToWorld = craftWorldClass.getDeclaredMethod(
+                    "addEntityToWorld",
+                    net.minecraft.world.entity.Entity.class,
+                    CreatureSpawnEvent.SpawnReason.class);
+            addEntityToWorld.setAccessible(true);
+            plugin.getLogger().info("[HologramService] NMS bypass ready.");
+        } catch (Exception e) {
+            plugin.getLogger().warning("[HologramService] NMS bypass unavailable, "
+                    + "falling back to standard spawn: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Spawns an ArmorStand without firing CreatureSpawnEvent.
+     * Falls back to standard world.spawn() if reflection is unavailable.
+     */
+    private ArmorStand spawnSilently(Location loc) {
+        World world = loc.getWorld();
+        if (addEntityToWorld != null) {
+            try {
+                // Create NMS entity via craftbukkit internals
+                org.bukkit.craftbukkit.CraftWorld craftWorld =
+                        (org.bukkit.craftbukkit.CraftWorld) world;
+                net.minecraft.world.level.Level nmsLevel = craftWorld.getHandle();
+
+                net.minecraft.world.entity.decoration.ArmorStand nmsStand =
+                        new net.minecraft.world.entity.decoration.ArmorStand(
+                                net.minecraft.world.entity.EntityType.ARMOR_STAND, nmsLevel);
+                nmsStand.setPos(loc.getX(), loc.getY(), loc.getZ());
+                nmsStand.setYRot(loc.getYaw());
+
+                // Call addEntityToWorld directly — skips CreatureSpawnEvent
+                addEntityToWorld.invoke(craftWorld, nmsStand,
+                        CreatureSpawnEvent.SpawnReason.CUSTOM);
+
+                return (ArmorStand) nmsStand.getBukkitEntity();
+            } catch (Exception e) {
+                plugin.getLogger().warning("[HologramService] Silent spawn failed: "
+                        + e.getMessage());
+            }
+        }
+        // Fallback
+        return world.spawn(loc, ArmorStand.class,
+                CreatureSpawnEvent.SpawnReason.CUSTOM, stand -> {});
     }
 
     // -----------------------------------------------------------------------
@@ -116,80 +165,64 @@ public class HologramService {
     }
 
     // -----------------------------------------------------------------------
-    // Spawning — text stands (persistent=false → never saved to disk)
+    // Spawning
     // -----------------------------------------------------------------------
 
     private void spawnTextStands(Shop shop, Location base) {
         List<String> lines = buildLines(shop);
-        World world = base.getWorld();
         double textYBase = base.getY()
                 + plugin.getConfig().getDouble("hologram.text-y-offset", 2.1);
         double topY = textYBase + (lines.size() - 1) * LINE_SPACING;
 
         for (int i = 0; i < lines.size(); i++) {
-            final String line = lines.get(i);
             Location loc = base.clone();
             loc.setY(topY - i * LINE_SPACING);
 
-            world.spawn(loc, ArmorStand.class, as -> {
-                // Tag as NPC so MythicMobs skips this entity in its spawn listener
-                as.setMetadata("NPC", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
-                as.setVisible(false);
-                as.setCustomNameVisible(true);
-                as.setCustomName(color(line));
-                as.setGravity(false);
-                as.setInvulnerable(true);
-                as.setPersistent(false);   // ← never written to disk
-                as.setMarker(true);
-                as.setSmall(true);
-                as.setCollidable(false);
-                as.setCanPickupItems(false);
-                pdcSet(as, key(PDC_KEY), shop.getId().toString());
-            });
+            ArmorStand as = spawnSilently(loc);
+            as.setVisible(false);
+            as.setCustomNameVisible(true);
+            as.setCustomName(color(lines.get(i)));
+            as.setGravity(false);
+            as.setInvulnerable(true);
+            as.setPersistent(false);
+            as.setMarker(true);
+            as.setSmall(true);
+            as.setCollidable(false);
+            as.setCanPickupItems(false);
+            pdcSet(as, key(PDC_KEY), shop.getId().toString());
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Spawning — item stand (persistent=false → never saved to disk)
-    // -----------------------------------------------------------------------
-
     private void spawnItemStand(Shop shop, Location base) {
-        World world = base.getWorld();
-        if (world == null) return;
-
         double itemY = base.getY()
                 + plugin.getConfig().getDouble("hologram.item-y-offset", 1.35);
         Location loc = base.clone();
         loc.setY(itemY);
 
-        ArmorStand as = world.spawn(loc, ArmorStand.class, stand -> {
-            // Tag as NPC so MythicMobs skips this entity in its spawn listener
-            stand.setMetadata("NPC", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
-            stand.setVisible(false);
-            stand.setCustomNameVisible(false);
-            stand.setGravity(false);
-            stand.setInvulnerable(true);
-            stand.setPersistent(false);    // ← never written to disk
-            stand.setMarker(false);        // must be false for helmet to render
-            stand.setSmall(true);
-            stand.setCollidable(false);
-            stand.setCanPickupItems(false);
-            // Lock all slots so the item cannot be taken
-            for (org.bukkit.inventory.EquipmentSlot slot
-                    : org.bukkit.inventory.EquipmentSlot.values()) {
-                stand.addEquipmentLock(slot, ArmorStand.LockType.ADDING_OR_CHANGING);
-                stand.addEquipmentLock(slot, ArmorStand.LockType.REMOVING_OR_CHANGING);
-            }
-            stand.getEquipment().setHelmet(shop.getItem().clone());
-            pdcSet(stand, key(PDC_ITEM_KEY), shop.getId().toString());
-        });
+        ArmorStand as = spawnSilently(loc);
+        as.setVisible(false);
+        as.setCustomNameVisible(false);
+        as.setGravity(false);
+        as.setInvulnerable(true);
+        as.setPersistent(false);
+        as.setMarker(false);
+        as.setSmall(true);
+        as.setCollidable(false);
+        as.setCanPickupItems(false);
+        for (org.bukkit.inventory.EquipmentSlot slot
+                : org.bukkit.inventory.EquipmentSlot.values()) {
+            as.addEquipmentLock(slot, ArmorStand.LockType.ADDING_OR_CHANGING);
+            as.addEquipmentLock(slot, ArmorStand.LockType.REMOVING_OR_CHANGING);
+        }
+        as.getEquipment().setHelmet(shop.getItem().clone());
+        pdcSet(as, key(PDC_ITEM_KEY), shop.getId().toString());
 
         itemStandIds.put(shop.getId(), as.getUniqueId());
         maybeStartGlobalTask();
     }
 
     // -----------------------------------------------------------------------
-    // Global animation task — ONE task for ALL shops
+    // Global animation task
     // -----------------------------------------------------------------------
 
     private void maybeStartGlobalTask() {
@@ -209,7 +242,6 @@ public class HologramService {
                     itemStandIds.remove(shopId);
                     continue;
                 }
-
                 Shop shop = plugin.getShopManager().getById(shopId).orElse(null);
                 if (shop == null) { itemStandIds.remove(shopId); continue; }
 
@@ -223,7 +255,6 @@ public class HologramService {
                 newLoc.setYaw(yaw);
                 as.teleport(newLoc);
             }
-
             if (itemStandIds.isEmpty()) maybeStopGlobalTask();
         }, 2L, 2L).getTaskId();
     }
