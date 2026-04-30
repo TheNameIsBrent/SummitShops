@@ -48,7 +48,7 @@ public class HologramService {
     // Reflection handles — resolved once at startup
     private Method craftWorldAddEntity   = null; // CraftWorld.addEntityToWorld(NMSEntity, SpawnReason)
     private Method craftWorldGetHandle   = null; // CraftWorld.getHandle() → ServerLevel
-    private Method nmsLevelCreateEntity  = null; // EntityType.create(ServerLevel) or constructor
+    private java.lang.reflect.Constructor<?> nmsArmorStandCtor = null;
     private Object nmsArmorStandType     = null; // net.minecraft.world.entity.EntityType.ARMOR_STAND
     private Method nmsEntitySetPos       = null; // NMSEntity.setPos(double,double,double)
     private Method nmsEntitySetYRot      = null; // NMSEntity.setYRot(float)
@@ -95,8 +95,8 @@ public class HologramService {
                     Class.forName("net.minecraft.world.entity.decoration.ArmorStand");
             Class<?> nmsLevelClass = Class.forName("net.minecraft.world.level.Level");
 
-            nmsLevelCreateEntity = nmsArmorStandClass.getConstructor(entityTypeClass, nmsLevelClass);
-            nmsLevelCreateEntity.setAccessible(true);
+            nmsArmorStandCtor = nmsArmorStandClass.getConstructor(entityTypeClass, nmsLevelClass);
+            nmsArmorStandCtor.setAccessible(true);
 
             // NMSEntity.setPos(double, double, double)
             Class<?> nmsEntityClass = Class.forName("net.minecraft.world.entity.Entity");
@@ -125,7 +125,7 @@ public class HologramService {
                 Object nmsWorld   = craftWorldGetHandle.invoke(craftWorld);
 
                 // new net.minecraft.world.entity.decoration.ArmorStand(EntityType, Level)
-                Object nmsStand = nmsLevelCreateEntity.invoke(null, nmsArmorStandType, nmsWorld);
+                Object nmsStand = nmsArmorStandCtor.newInstance(nmsArmorStandType, nmsWorld);
 
                 nmsEntitySetPos.invoke(nmsStand, loc.getX(), loc.getY(), loc.getZ());
                 nmsEntitySetYRot.invoke(nmsStand, loc.getYaw());
